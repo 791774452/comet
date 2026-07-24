@@ -2,6 +2,20 @@
 
 All notable changes to @rpamis/comet will be documented in this file.
 
+## What's Changed [0.4.0-beta.9] - 2026-07-23
+
+### Added
+
+- **`comet native evidence format`**: New command that serializes acceptance evidence entries into the exact canonical Markdown block `verification.md` requires, so evidence blocks no longer need to be hand-formatted to match byte-for-byte and no longer trigger spurious "canonical serialization" rejections during Verify.
+
+### Fixed
+
+- **Plugin marketplace superpowers detection**: `comet init` no longer crashes with an `ENOTDIR` error when `~/.claude/plugins/cache/` (or the Codex equivalent) contains a stray file where a marketplace directory was expected.
+
+### Security
+
+- **Race-safe file reads**: Reading `.comet/current-change.json` (used on every Hook Router call, `comet doctor`, and `comet resume-probe`), Native lock files, and `comet native evidence format --entries` input could previously be tricked mid-read: swapping the file for a symlink between the check and the read leaked the link target's content, and a FIFO at the lock path hung the process. These reads now reject non-regular files before opening and verify the file is still the same one after opening and after reading, so a swapped file fails the read instead of being silently accepted. Windows, which lacks `O_NOFOLLOW`, gets the same protection through the identity checks.
+
 ## What's Changed [0.4.0-beta.8] - 2026-07-22
 
 ### Fixed
