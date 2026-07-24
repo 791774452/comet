@@ -9,6 +9,11 @@ import {
   parseNativeVerificationMachineBlock,
 } from '../../../domains/comet-native/native-acceptance.js';
 import { runNativeCli } from '../../../domains/comet-native/native-cli.js';
+import {
+  defaultProjectConfig,
+  readProjectConfig,
+  writeProjectConfig,
+} from '../../../domains/comet-native/native-config.js';
 import { NATIVE_CONTRACT_FILE_LIMITS } from '../../../domains/comet-native/native-contract-files.js';
 import { acquireNativeLock, releaseNativeLock } from '../../../domains/comet-native/native-lock.js';
 import { nativeProjectPaths } from '../../../domains/comet-native/native-paths.js';
@@ -77,6 +82,9 @@ describe('Comet Native CLI dispatcher', () => {
   });
 
   it('returns structured baseline diagnostics when change creation cannot capture a complete baseline', async () => {
+    const config = defaultProjectConfig('.');
+    config.native.snapshot.max_total_bytes = 5 * 1024 * 1024;
+    await writeProjectConfig(projectRoot, config);
     await fs.writeFile(
       path.join(projectRoot, 'oversized-baseline.bin'),
       Buffer.alloc(5 * 1024 * 1024 + 1, 0x61),
@@ -177,7 +185,7 @@ describe('Comet Native CLI dispatcher', () => {
       json(await runNativeCli(['status', 'sentence-counting', '--json', ...projectArgs()])).data,
     ).toMatchObject({
       phase: 'shape',
-      nextCommand: 'comet native next sentence-counting --summary "<summary>"',
+      nextCommand: 'comet native next sentence-counting --summary "<summary>" --confirmed',
     });
     expect(await runNativeCli(['select', 'sentence-counting', ...projectArgs()])).toMatchObject({
       exitCode: 0,
@@ -189,6 +197,7 @@ describe('Comet Native CLI dispatcher', () => {
         'sentence-counting',
         '--summary',
         'Requirements are clear',
+        '--confirmed',
         '--json',
         ...projectArgs(),
       ]),
@@ -319,6 +328,7 @@ Pass.
           'paged-acceptance',
           '--summary',
           'The acceptance contract is executable',
+          '--confirmed',
           ...projectArgs(),
         ])
       ).exitCode,
@@ -508,6 +518,103 @@ Pass.
     );
 
     expect(result).toMatchObject({
+      exitCode: 0,
+      data: { change: { phase: 'build', approval: 'confirmed' } },
+    });
+  });
+
+  it('enforces shared-understanding confirmation in Sequential and Batch modes', async () => {
+    await runNativeCli(['init', '--root', 'docs', ...projectArgs()]);
+    await runNativeCli(['new', 'mode-boundary', ...projectArgs()]);
+    const paths = await nativeProjectPaths(projectRoot, 'docs');
+    const changeDir = path.join(paths.changesDir, 'mode-boundary');
+    await fs.writeFile(path.join(changeDir, 'brief.md'), brief);
+
+    const blocked = json(
+      await runNativeCli([
+        'next',
+        'mode-boundary',
+        '--summary',
+        'Sequential clarification is complete',
+        '--json',
+        ...projectArgs(),
+      ]),
+    );
+    expect(blocked).toMatchObject({
+      exitCode: 65,
+      data: {
+        next: 'manual',
+        change: { phase: 'shape', approval: null },
+        findings: [
+          expect.objectContaining({
+            code: 'shape-confirmation-required',
+            retryCommand: 'comet native next mode-boundary --summary "<summary>" --confirmed',
+          }),
+        ],
+      },
+    });
+    const sequentialStatus = json(
+      await runNativeCli(['status', 'mode-boundary', '--json', ...projectArgs()]),
+    );
+    expect(sequentialStatus).toMatchObject({
+      data: {
+        nextCommand: 'comet native next mode-boundary --summary "<summary>" --confirmed',
+        continuation: {
+          command: 'comet native next mode-boundary --summary "<summary>" --confirmed',
+          requiredInputs: ['summary', 'shared-understanding-confirmation'],
+        },
+      },
+    });
+
+    const config = await readProjectConfig(projectRoot);
+    expect(config).not.toBeNull();
+    await writeProjectConfig(projectRoot, {
+      ...config!,
+      native: { ...config!.native, clarification_mode: 'batch' },
+    });
+    const batchStatus = json(
+      await runNativeCli(['status', 'mode-boundary', '--json', ...projectArgs()]),
+    );
+    expect(batchStatus).toMatchObject({
+      data: {
+        nextCommand: 'comet native next mode-boundary --summary "<summary>" --confirmed',
+        continuation: {
+          command: 'comet native next mode-boundary --summary "<summary>" --confirmed',
+          requiredInputs: ['summary', 'shared-understanding-confirmation'],
+        },
+      },
+    });
+
+    const batchBlocked = json(
+      await runNativeCli([
+        'next',
+        'mode-boundary',
+        '--summary',
+        'Batch clarification is complete',
+        '--json',
+        ...projectArgs(),
+      ]),
+    );
+    expect(batchBlocked).toMatchObject({
+      exitCode: 65,
+      data: {
+        change: { phase: 'shape', approval: null },
+        findings: [expect.objectContaining({ code: 'shape-confirmation-required' })],
+      },
+    });
+
+    const advanced = json(
+      await runNativeCli([
+        'next',
+        'mode-boundary',
+        '--summary',
+        'Batch shared understanding is confirmed',
+        '--confirmed',
+        '--json',
+        ...projectArgs(),
+      ]),
+    );
+    expect(advanced).toMatchObject({
       exitCode: 0,
       data: { change: { phase: 'build', approval: 'confirmed' } },
     });
@@ -801,24 +908,27 @@ Pass.
     },
   );
 
-  it('rejects a symlink entries source instead of following it', async () => {
-    const target = path.join(projectRoot, 'entries-target.json');
-    await fs.writeFile(target, JSON.stringify([]));
-    const linkPath = path.join(projectRoot, 'entries-link.json');
-    await fs.symlink(target, linkPath);
+  it.skipIf(process.platform === 'win32')(
+    'rejects a symlink entries source instead of following it',
+    async () => {
+      const target = path.join(projectRoot, 'entries-target.json');
+      await fs.writeFile(target, JSON.stringify([]));
+      const linkPath = path.join(projectRoot, 'entries-link.json');
+      await fs.symlink(target, linkPath);
 
-    const result = await runNativeCli([
-      'evidence',
-      'format',
-      '--entries',
-      linkPath,
-      '--json',
-      ...projectArgs(),
-    ]);
+      const result = await runNativeCli([
+        'evidence',
+        'format',
+        '--entries',
+        linkPath,
+        '--json',
+        ...projectArgs(),
+      ]);
 
-    expect(result.exitCode).toBe(65);
-    expect(json(result)).toMatchObject({
-      error: { code: 'invalid-data', message: expect.stringContaining('not a regular file') },
-    });
-  });
+      expect(result.exitCode).toBe(65);
+      expect(json(result)).toMatchObject({
+        error: { code: 'invalid-data', message: expect.stringContaining('not a regular file') },
+      });
+    },
+  );
 });

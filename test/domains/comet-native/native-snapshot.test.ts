@@ -13,6 +13,7 @@ import {
 import { sha256Text } from '../../../domains/comet-native/native-hash.js';
 import { nativeProjectPaths } from '../../../domains/comet-native/native-paths.js';
 import {
+  compileNativeSnapshotPattern,
   createNativeContentSnapshot,
   filterNativeContentSnapshotToProjectScope,
   inspectNativeContentSnapshotHealth,
@@ -1455,6 +1456,102 @@ describe('Native VCS-independent content snapshots', () => {
       expect.objectContaining({ path: 'c.txt', reason: 'file-count' }),
     ]);
     expect(manifest.omittedCount).toBe(2);
+  });
+
+  it('accepts an exact total-byte boundary and omits the first byte beyond it', async () => {
+    await Promise.all([
+      fs.writeFile(path.join(projectRoot, 'a.bin'), Buffer.alloc(4, 0x61)),
+      fs.writeFile(path.join(projectRoot, 'b.bin'), Buffer.alloc(1, 0x62)),
+    ]);
+
+    const exact = await createNativeContentSnapshot(paths, {
+      limits: { maxFileBytes: 5, maxTotalBytes: 5 },
+    });
+    const exceeded = await createNativeContentSnapshot(paths, {
+      limits: { maxFileBytes: 5, maxTotalBytes: 4 },
+    });
+
+    expect(exact).toMatchObject({
+      complete: true,
+      omittedCount: 0,
+    });
+    expect(exact.entries.map((entry) => [entry.path, entry.size])).toEqual([
+      ['a.bin', 4],
+      ['b.bin', 1],
+    ]);
+    expect(exceeded).toMatchObject({
+      complete: false,
+      omittedCount: 1,
+      omitted: [expect.objectContaining({ path: 'b.bin', reason: 'total-size', size: 1 })],
+    });
+  });
+
+  it('applies an auditable snapshot policy without treating excluded files as omissions', async () => {
+    await Promise.all([
+      fs.mkdir(path.join(projectRoot, 'src'), { recursive: true }),
+      fs.mkdir(path.join(projectRoot, 'data'), { recursive: true }),
+    ]);
+    await Promise.all([
+      fs.writeFile(path.join(projectRoot, 'src', 'app.ts'), 'export {};\n'),
+      fs.writeFile(path.join(projectRoot, 'data', 'dataset.bin'), Buffer.alloc(1024, 0x61)),
+    ]);
+
+    const manifest = await createNativeContentSnapshot(paths, {
+      policy: {
+        include: ['**/*'],
+        exclude: ['data/**'],
+      },
+      limits: {
+        maxFileBytes: 2048,
+        maxTotalBytes: 2048,
+        maxDurationMs: 60_000,
+      },
+    });
+
+    expect(manifest.complete).toBe(true);
+    expect(manifest.entries.map((entry) => entry.path)).toEqual(['src/app.ts']);
+    expect(manifest.omitted).toEqual([]);
+    expect(manifest.policy).toMatchObject({
+      schema: 'comet.native.snapshot-policy.v1',
+      include: ['**/*'],
+      exclude: ['data/**'],
+      hash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    });
+  });
+
+  it('matches snapshot globs without catastrophic backtracking', () => {
+    const matcher = compileNativeSnapshotPattern(`${'**/'.repeat(8)}target.ts`);
+    const startedAt = performance.now();
+
+    expect(matcher(`${'nested/'.repeat(80)}missing.ts`)).toBe(false);
+    expect(performance.now() - startedAt).toBeLessThan(100);
+  });
+
+  it('stops snapshot glob matching cooperatively when its budget expires', () => {
+    const matcher = compileNativeSnapshotPattern('**') as (
+      relative: string,
+      hasBudget?: () => boolean,
+    ) => boolean;
+    let budgetChecks = 0;
+
+    expect(
+      matcher('x'.repeat(4_096), () => {
+        budgetChecks += 1;
+        return budgetChecks === 1;
+      }),
+    ).toBe(false);
+    expect(budgetChecks).toBeGreaterThan(1);
+  });
+
+  it.each([
+    ['src/**/*.ts', 'src/index.ts', true],
+    ['src/**/*.ts', 'src/nested/index.ts', true],
+    ['src/**/*.ts', 'src/nested/index.js', false],
+    ['assets/**', 'assets/icons/logo.svg', true],
+    ['?.md', 'a.md', true],
+    ['?.md', 'docs/a.md', false],
+  ])('matches snapshot glob %s against %s', (pattern, relativePath, expected) => {
+    expect(compileNativeSnapshotPattern(pattern)(relativePath)).toBe(expected);
   });
 
   it('retains a deterministic hash/ref for omissions beyond the recorded output budget', async () => {

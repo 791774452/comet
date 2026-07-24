@@ -2,14 +2,23 @@
 
 All notable changes to @rpamis/comet will be documented in this file.
 
-## What's Changed [0.4.0-beta.9] - 2026-07-23
+## What's Changed [0.4.0-beta.9] - 2026-07-25
 
 ### Added
 
+- **Sequential clarification evaluation**: Adds a repeatable multi-turn Native evaluation that checks whether Sequential investigates repository facts, resolves dependent user-owned decisions one at a time, records each answer, confirms a complete shared understanding before Build, and finishes verified implementation. Task-defined reply sequences keep decision paths reproducible instead of allowing the simulated user to invent additional choices.
 - **`comet native evidence format`**: New command that serializes acceptance evidence entries into the exact canonical Markdown block `verification.md` requires, so evidence blocks no longer need to be hand-formatted to match byte-for-byte and no longer trigger spurious "canonical serialization" rejections during Verify.
+
+### Changed
+
+- **Native clarification modes**: Sequential mode now recalculates remaining user-visible decisions after each answer and asks exactly one most-upstream decision with a recommendation and impact per round. Batch maintains a prerequisite-aware decision tree, asks the entire ready frontier each round, and keeps environment-fact investigations from delaying other ready questions when parallel work is available. Both modes require every behavior in the final shared-understanding summary to be traceable, and Runtime enforces explicit confirmation before Build; older `implicit` changes must also confirm before leaving Build.
 
 ### Fixed
 
+- **Native baselines for large repositories**: Native content snapshots now support baseline-bound include/exclude policies and configurable file-count, total-byte, and duration budgets in `.comet/config.yaml`, with a 256 MiB default total budget and no separate 5 MiB per-file cap. Runtime continues to hash actual working-tree content with streaming SHA-256, records the effective policy and limits for audit, and reports actionable configuration fixes when a complete baseline cannot be captured ([#226](https://github.com/rpamis/comet/issues/226)).
+- **Global workflow selection**: `comet init` now offers Native, Classic, or both for global installs and accepts `--scope global --workflow native|classic|both`, so global Skill installation exposes the same workflow choices as project scope while preserving Classic as the non-interactive default when no workflow is specified ([#234](https://github.com/rpamis/comet/issues/234)).
+- **Explicit Comet Skill invocation**: Ambient Resume project instructions now give host-recognized manual Comet Skill invocations precedence over recovery probing, preventing `none` or `out_of_scope` results from skipping `/comet` when no active change exists ([#235](https://github.com/rpamis/comet/issues/235)).
+- **Classic archive final state**: Classic now confirms immediate remote delivery before irreversible archive, writes `branch_status: handled` before the single archive commit, and pushes that complete commit once. Successful archive no longer leaves an uncommitted `.comet.yaml` or a remote archive stuck at `pending` ([#237](https://github.com/rpamis/comet/issues/237)).
 - **Plugin marketplace superpowers detection**: `comet init` no longer crashes with an `ENOTDIR` error when `~/.claude/plugins/cache/` (or the Codex equivalent) contains a stray file where a marketplace directory was expected.
 
 ### Security

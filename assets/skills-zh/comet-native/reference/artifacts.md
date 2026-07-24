@@ -53,9 +53,18 @@ native:
   artifact_root: docs
   language: zh-CN
   clarification_mode: sequential
+  snapshot:
+    include:
+      - "**/*"
+    exclude: []
+    max_files: 10000
+    max_total_bytes: 268435456
+    max_duration_ms: 60000
 ```
 
-`clarification_mode` 只控制 Native 如何组织用户决定：`sequential` 每轮询问一个最上游问题，`batch` 每轮询问所有前置条件已经确定的问题。字段缺失时使用 `sequential`。它不改变 change schema、生命周期、Guard、安全确认或调用方停点。
+`clarification_mode` 控制 Native 如何组织用户决定，以及离开 Shape 前采用哪条确认契约：`sequential` 每轮询问一个最上游问题，`batch` 每轮询问所有前置条件已经确定的问题。字段缺失时使用 `sequential`。它不改变 change schema、生命周期、安全确认或调用方停点。
+
+`snapshot` 定义内容快照的显式范围与资源预算。`include`/`exclude` 使用项目相对 `/` 路径以及 `*`、`**`、`?`；规范化策略及 hash 会写入新 change 的 baseline。后续 current snapshot 继续使用 baseline 策略，不能靠中途修改范围隐藏实现变化。`max_files`、`max_total_bytes` 和 `max_duration_ms` 只限制捕获工作，可按仓库规模提高；文件内容使用流式 SHA-256，不依赖 Git object hash，也没有独立的 5 MiB 单文件限制。
 
 根目录迁移期间会出现 runtime 管理的 `pending_root_move`。存在该字段时普通写命令必须停止，不能自行选择旧根或新根。
 
@@ -103,7 +112,7 @@ run_id: null
 
 不要直接编辑 Runtime 管理字段。`phase`、`revision`、`approval`、`approved_contract_hash`、`spec_changes`、operation、`base_hash`、三个 evidence ref、`run_id` 和 `archived` 都由 Runtime 管理。
 
-`approved_contract_hash` 把 approval 绑定到当时的 brief/spec contract。contract 发生变化后，必须由用户重新确认。需要改变需求时，只更新 brief 和 `specs/<capability>/spec.md`；删除 capability 使用 `comet native spec remove`，再由命令检查并推进。
+`approval: confirmed` 表示 Runtime 已记录用户对当前共享理解的明确确认。`implicit` 只用于兼容旧 change，不代表用户已经确认；处于 Build 的旧 `implicit` change 必须确认后才能进入 Verify。`approved_contract_hash` 把 approval 绑定到当时的 brief/spec contract，contract 发生变化后也必须由用户重新确认。需要改变需求时，只更新 brief 和 `specs/<capability>/spec.md`；删除 capability 使用 `comet native spec remove`，再由命令检查并推进。
 
 ## Brief
 
@@ -122,7 +131,7 @@ run_id: null
 
 前四节必须有实质内容。仍阻塞实现的问题在 Open questions 下以 `- [blocking]` 开头；普通备注不会阻塞 Shape。
 
-Sequential 模式的 Open questions 同时保存一个最上游阻塞问题。Batch 模式使用 `- [blocking] Q1: <问题>`、`- [blocking] Q2: <问题>` 保存本轮全部可回答问题；该无序列表前缀是 Runtime 识别阻塞的固定格式，不能改成 Markdown 有序列表。未回答项继续保持 `[blocking]`。本轮问题处理完且完整性复核通过后，Batch 模式使用 `- [blocking] CONFIRM: <确认内容>` 保存共享理解确认，明确确认前不能进入 Build。
+Sequential 模式的 Open questions 同时保存一个最上游阻塞问题。Batch 模式使用 `- [blocking] Q1: <问题>`、`- [blocking] Q2: <问题>` 保存本轮全部可回答问题；该无序列表前缀是 Runtime 识别阻塞的固定格式，不能改成 Markdown 有序列表。未回答项继续保持 `[blocking]`。当前模式的全部问题处理完且完整性复核通过后，两种模式都使用 `- [blocking] CONFIRM: <确认内容>` 保存共享理解确认，明确确认前不能进入 Build。
 
 问题编号只服务于当前澄清轮次。已确认答案应写入 Decisions 和完整目标规格；不要新增决策树产物，也不要把隐藏推理写入 brief。
 
@@ -185,7 +194,7 @@ comet native evidence format [--entries <path>]
 
 ## 内容寻址证据
 
-- `baseline-manifest.json`：change 创建时的有界项目快照。它只记录项目相对路径、size、hash、capture provider 和省略事实，不保存文件内容。Git provider 纳入 tracked 和未被 ignore 的 untracked 文件，并把 submodule/gitlink 作为原子条目；非 Git 项目使用带前后枚举围栏的有界物理树 provider。创建时若项目所有范围内仍有省略项，`new` 会失败并清理未完成 change。
+- `baseline-manifest.json`：change 创建时的有界项目快照。它只记录项目相对路径、size、内容 hash、capture provider、规范化 scope policy、实际资源预算和省略事实，不保存文件内容。Git 只用于项目文件枚举和 gitlink 边界，不作为普通文件的内容身份；普通文件始终流式计算 SHA-256。Git provider 纳入 tracked 和未被 ignore 的 untracked 文件，并把 submodule/gitlink 作为原子条目；非 Git 项目使用带前后枚举围栏的有界物理树 provider。显式排除项属于 baseline 定义之外，不伪装成 omission；创建时若策略范围内仍有省略项，`new` 会失败并清理未完成 change，同时返回实际限制与支持的配置修复路径。
   - `git-selection-changed`：等待 Git 写入稳定后重试，不能授权为 partial scope。
   - `git-enumeration-limit`：先缩小或清理项目所有范围。只有 current snapshot 返回可授权 scope，且用户接受未知尾部的具体风险时，才能按精确 hash、理由与 `--confirmed` 使用 partial 协议。
   - `physical-selection-changed` 和 `physical-enumeration-limit`：稳定或缩小项目树后重试，不能授权为 partial scope。

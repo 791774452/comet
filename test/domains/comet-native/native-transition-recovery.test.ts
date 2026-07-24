@@ -37,7 +37,6 @@ import {
 } from '../../../domains/comet-native/native-transition-journal.js';
 import { appendNativeTrajectoryEvent } from '../../../domains/comet-native/native-trajectory.js';
 import { repairNativeTrajectoryTail } from '../../../domains/comet-native/native-trajectory-recovery.js';
-import { advanceNativeChange } from '../../../domains/comet-native/native-transitions.js';
 import type {
   NativeChangeState,
   NativeProjectPaths,
@@ -45,6 +44,7 @@ import type {
   NativeTransitionHooks,
   NativeTransitionJournal,
 } from '../../../domains/comet-native/native-types.js';
+import { advanceNativeChange } from '../../helpers/native-confirmed-transition.js';
 import { nativeVerificationFixtureReport } from '../../helpers/native-verification.js';
 import { readyNativeArchivePreflight } from '../../helpers/native-archive.js';
 import {
@@ -941,7 +941,7 @@ describe('Native transition recovery', () => {
           name: 'recover-transition',
           evidence: { summary: 'must fail closed before doctor migration' },
         }),
-      ).rejects.toThrow('requires doctor migration');
+      ).rejects.toThrow('run comet native doctor recover-transition --repair before mutating it');
       const inspected = await doctorNativeProject({ paths, name: 'recover-transition' });
       expect(inspected.findings).toContainEqual(
         expect.objectContaining({ code: 'schema-migration-required', repair: 'migrate' }),

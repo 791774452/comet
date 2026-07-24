@@ -339,7 +339,9 @@ async function dispatch(
     await ensureNativeDirectories(paths);
     const state = await createNativeChange({ paths, name, language });
     await selectNativeChange(paths, state.name);
-    const status = await inspectNativeStatus(paths, state.name);
+    const status = await inspectNativeStatus(paths, state.name, {
+      clarificationMode: config.native.clarification_mode,
+    });
     return success(
       'new',
       { ...state, continuation: status.continuation },
@@ -352,9 +354,11 @@ async function dispatch(
       const name = requiredPositional(rawArgs, 'change name');
       const capability = requiredPositional(rawArgs, 'capability');
       assertNoArguments(rawArgs);
-      const { paths } = await configuredPaths(projectRoot);
+      const { config, paths } = await configuredPaths(projectRoot);
       const state = await markNativeSpecRemoval(paths, name, capability);
-      const status = await inspectNativeStatus(paths, state.name);
+      const status = await inspectNativeStatus(paths, state.name, {
+        clarificationMode: config.native.clarification_mode,
+      });
       return success(
         'spec remove',
         { ...state, continuation: status.continuation },
@@ -366,9 +370,11 @@ async function dispatch(
       const summary = takeOption(rawArgs, '--summary');
       if (!summary) throw new NativeUsageError('--summary is required');
       assertNoArguments(rawArgs);
-      const { paths } = await configuredPaths(projectRoot);
+      const { config, paths } = await configuredPaths(projectRoot);
       const state = await rebaseNativeSpecChanges({ paths, name, summary });
-      const status = await inspectNativeStatus(paths, state.name);
+      const status = await inspectNativeStatus(paths, state.name, {
+        clarificationMode: config.native.clarification_mode,
+      });
       return success(
         'spec rebase',
         { ...state, continuation: status.continuation },
@@ -380,8 +386,11 @@ async function dispatch(
   if (command === 'list') {
     const cursor = takeOption(rawArgs, '--cursor');
     assertNoArguments(rawArgs);
-    const { paths } = await configuredPaths(projectRoot);
-    const page = await listNativeStatusPage(paths, cursor ? { cursor } : undefined);
+    const { config, paths } = await configuredPaths(projectRoot);
+    const page = await listNativeStatusPage(paths, {
+      ...(cursor ? { cursor } : {}),
+      clarificationMode: config.native.clarification_mode,
+    });
     return success('list', page);
   }
   if (command === 'show') {
@@ -437,21 +446,27 @@ async function dispatch(
       throw new NativeUsageError('--acceptance-cursor requires a change name');
     }
     assertNoArguments(rawArgs);
-    const { paths } = await configuredPaths(projectRoot);
+    const { config, paths } = await configuredPaths(projectRoot);
     const data = name
       ? await inspectNativeStatus(paths, name, {
           details,
           ...(acceptanceCursor ? { acceptanceCursor } : {}),
+          clarificationMode: config.native.clarification_mode,
         })
-      : await listNativeStatusPage(paths, cursor ? { cursor } : undefined);
+      : await listNativeStatusPage(paths, {
+          ...(cursor ? { cursor } : {}),
+          clarificationMode: config.native.clarification_mode,
+        });
     return success('status', data);
   }
   if (command === 'select') {
     const name = requiredPositional(rawArgs, 'change name');
     assertNoArguments(rawArgs);
-    const { paths } = await configuredPaths(projectRoot);
+    const { config, paths } = await configuredPaths(projectRoot);
     await selectNativeChange(paths, name);
-    const status = await inspectNativeStatus(paths, name);
+    const status = await inspectNativeStatus(paths, name, {
+      clarificationMode: config.native.clarification_mode,
+    });
     return success(
       'select',
       { selected: name, continuation: status.continuation },
@@ -467,7 +482,7 @@ async function dispatch(
     const artifacts = takeMany(rawArgs, '--artifact');
     const expectedRevision = revisionOption(rawArgs);
     assertNoArguments(rawArgs);
-    const { paths } = await configuredPaths(projectRoot);
+    const { config, paths } = await configuredPaths(projectRoot);
     const result = await checkpointNativeChange({
       paths,
       name,
@@ -476,7 +491,9 @@ async function dispatch(
       artifacts,
       expectedRevision,
     });
-    const status = await inspectNativeStatus(paths, name);
+    const status = await inspectNativeStatus(paths, name, {
+      clarificationMode: config.native.clarification_mode,
+    });
     const manifestRef = path
       .relative(
         paths.projectRoot,
@@ -607,7 +624,7 @@ async function dispatch(
       throw new NativeUsageError('--override-repair cannot be combined with --result');
     }
     assertNoArguments(rawArgs);
-    const { paths } = await configuredPaths(projectRoot);
+    const { config, paths } = await configuredPaths(projectRoot);
     const evidence: NativeAdvanceEvidence = {
       summary,
       ...(confirmed ? { confirmed: true } : {}),
@@ -623,7 +640,12 @@ async function dispatch(
       ...(repairOverrideSignature ? { repairOverrideSignature } : {}),
       ...(repairOverrideSummary ? { repairOverrideSummary } : {}),
     };
-    const result = await advanceNativeChange({ paths, name, evidence });
+    const result = await advanceNativeChange({
+      paths,
+      name,
+      evidence,
+      clarificationMode: config.native.clarification_mode,
+    });
     if (result.next === 'manual') {
       const repairBlocked =
         result.repair?.disposition === 'manual-stop' ||
@@ -645,7 +667,9 @@ async function dispatch(
         },
       };
     }
-    const status = await inspectNativeStatus(paths, name);
+    const status = await inspectNativeStatus(paths, name, {
+      clarificationMode: config.native.clarification_mode,
+    });
     return success('next', { ...result, continuation: status.continuation });
   }
   if (command === 'archive') {
@@ -767,6 +791,13 @@ function errorResult(command: string | null, error: unknown): DispatchResult {
         omittedByReason: error.omittedByReason,
         samplePaths: error.samplePaths,
         sampleTruncated: error.sampleTruncated,
+        effectiveLimits: error.effectiveLimits,
+        policyHash: error.policyHash,
+        configPath: '.comet/config.yaml',
+        supportedFixes: [
+          'increase native.snapshot.max_total_bytes or native.snapshot.max_duration_ms',
+          'add an explicit native.snapshot.exclude pattern for data outside implementation scope',
+        ],
         requiredAction: 'resolve-native-baseline',
       },
       error: { code: 'baseline-incomplete', message: error.message },

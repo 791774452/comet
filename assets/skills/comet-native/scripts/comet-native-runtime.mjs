@@ -8026,6 +8026,12 @@ var COMMENTS = {
     "native.artifact_root": "# Root directory where Native stores Comet specs, changes, and runtime data.",
     "native.language": "# Artifact language used by Native workflow documents.\n# language: en | zh-CN",
     "native.clarification_mode": "# Controls whether Native asks one clarification at a time or every currently answerable question in a round.\n# clarification_mode: sequential | batch",
+    "native.snapshot": "# Controls the auditable project scope and bounded work used by Native content snapshots.",
+    "native.snapshot.include": "# Selects the project-relative paths included in Native snapshots. Patterns use / and support *, **, and ?.",
+    "native.snapshot.exclude": "# Removes paths from the included scope. Exclusions are bound into each new change baseline.",
+    "native.snapshot.max_files": "# Bounds the number of files captured by one snapshot. Increase it for large monorepos.",
+    "native.snapshot.max_total_bytes": "# Bounds the total file content hashed by one snapshot. Content is streamed and does not depend on Git hashes.",
+    "native.snapshot.max_duration_ms": "# Bounds snapshot capture time in milliseconds. Increase it together with the byte budget on slower or larger repositories.",
     classic: "# Classic workflow settings. They do not change Native state or behavior.",
     "classic.language": "# Artifact language used by Classic workflow documents.\n# language: en | zh-CN",
     "classic.context_compression": "# Controls beta context compression for new Classic changes.\n# context_compression: off | beta",
@@ -8041,6 +8047,12 @@ var COMMENTS = {
     "native.artifact_root": "# Native 产物的存放根目录，包括规格、change 和运行时数据。",
     "native.language": "# Native 工作流文档使用的产物语言。\n# 可选值：en | zh-CN",
     "native.clarification_mode": "# Native 每轮询问一个问题，或一次提出当前所有可回答的问题。\n# 可选值：sequential | batch",
+    "native.snapshot": "# Native 内容快照使用的可审计项目范围与有界工作预算。",
+    "native.snapshot.include": "# Native 快照纳入的项目相对路径；模式使用 /，支持 *、** 和 ?。",
+    "native.snapshot.exclude": "# 从纳入范围中排除路径；新 change 会把排除策略绑定到 baseline。",
+    "native.snapshot.max_files": "# 单次快照最多捕获的文件数；大型 monorepo 可按需提高。",
+    "native.snapshot.max_total_bytes": "# 单次快照最多哈希的文件内容总字节数；内容采用流式读取，不依赖 Git hash。",
+    "native.snapshot.max_duration_ms": "# 单次快照的最长执行时间（毫秒）；较慢或更大的仓库应与字节预算一并提高。",
     classic: "# Classic 工作流配置，不会改变 Native 的状态或行为。",
     "classic.language": "# Classic 工作流文档使用的产物语言。\n# 可选值：en | zh-CN",
     "classic.context_compression": "# 新建 Classic change 是否启用 beta 上下文压缩。\n# 可选值：off | beta",
@@ -8051,7 +8063,7 @@ var COMMENTS = {
 function projectConfigComment(key, language) {
   return COMMENTS[language][key];
 }
-function commentKey(line, block) {
+function commentKey(line, block, nativeNested) {
   const match = /^(\s*)([a-z_]+):/u.exec(line);
   if (!match) return null;
   const indent = match[1].length;
@@ -8061,13 +8073,18 @@ function commentKey(line, block) {
     const blockKey = `${block}.${key}`;
     if (blockKey in COMMENTS.en) return blockKey;
   }
+  if (indent === 4 && block === "native" && nativeNested === "snapshot") {
+    const nestedKey = `native.snapshot.${key}`;
+    if (nestedKey in COMMENTS.en) return nestedKey;
+  }
   return null;
 }
 function renderStructuredProjectConfig(value, language) {
   const output = [];
   let block = null;
+  let nativeNested = null;
   for (const line of (0, import_yaml.stringify)(value).trimEnd().split("\n")) {
-    const key = commentKey(line, block);
+    const key = commentKey(line, block, nativeNested);
     if (key) {
       const indent = line.match(/^\s*/u)?.[0] ?? "";
       for (const comment of projectConfigComment(key, language).split("\n")) {
@@ -8079,6 +8096,9 @@ function renderStructuredProjectConfig(value, language) {
       if (line.startsWith("native:")) block = "native";
       else if (line.startsWith("classic:")) block = "classic";
       else block = null;
+      nativeNested = null;
+    } else if (/^ {2}[a-z_]+:/u.test(line) && block === "native") {
+      nativeNested = line.startsWith("  snapshot:") ? "snapshot" : null;
     }
   }
   output.push("");
@@ -8673,11 +8693,100 @@ var NATIVE_KEYS = /* @__PURE__ */ new Set([
   "artifact_root",
   "language",
   "clarification_mode",
+  "snapshot",
   "pending_root_move"
+]);
+var SNAPSHOT_KEYS = /* @__PURE__ */ new Set([
+  "include",
+  "exclude",
+  "max_files",
+  "max_total_bytes",
+  "max_duration_ms"
 ]);
 var PENDING_KEYS = /* @__PURE__ */ new Set(["id", "from_artifact_root", "to_artifact_root", "stage", "cleanup"]);
 var NATIVE_PROJECT_CONFIG_MAX_BYTES = 64 * 1024;
 var CLEANUP_KEYS = /* @__PURE__ */ new Set(["kind", "state", "manifest_hash"]);
+var MAX_NATIVE_SNAPSHOT_PATTERN_LENGTH = 1024;
+var MAX_NATIVE_SNAPSHOT_PATTERN_WILDCARDS = 64;
+var DEFAULT_NATIVE_SNAPSHOT_CONFIG = {
+  include: ["**/*"],
+  exclude: [],
+  max_files: 1e4,
+  max_total_bytes: 256 * 1024 * 1024,
+  max_duration_ms: 6e4
+};
+function normalizeNativeSnapshotPattern(value, label) {
+  if (typeof value !== "string" || value.length === 0 || value.includes("\\") || value.includes("\0") || value.startsWith("/") || value.split("/").includes("..")) {
+    throw new Error(`${label} contains an unsafe pattern`);
+  }
+  if (value.length > MAX_NATIVE_SNAPSHOT_PATTERN_LENGTH) {
+    throw new Error(`${label} exceeds ${MAX_NATIVE_SNAPSHOT_PATTERN_LENGTH} characters`);
+  }
+  let wildcardTokens = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] === "?") {
+      wildcardTokens += 1;
+    } else if (value[index] === "*") {
+      wildcardTokens += 1;
+      if (value[index + 1] === "*") index += 1;
+    }
+  }
+  if (wildcardTokens > MAX_NATIVE_SNAPSHOT_PATTERN_WILDCARDS) {
+    throw new Error(
+      `${label} contains more than ${MAX_NATIVE_SNAPSHOT_PATTERN_WILDCARDS} wildcard tokens`
+    );
+  }
+  return value;
+}
+function snapshotPatterns(value, label, fallback) {
+  if (value === void 0) return [...fallback];
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} contains an unsafe pattern`);
+  }
+  return [...new Set(value.map((pattern) => normalizeNativeSnapshotPattern(pattern, label)))].sort(
+    (left, right) => left.localeCompare(right, "en")
+  );
+}
+function positiveSnapshotInteger(value, fallback, label) {
+  const resolved = value ?? fallback;
+  if (!Number.isSafeInteger(resolved) || resolved < 1) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  return resolved;
+}
+function parseSnapshot(value) {
+  if (value === void 0)
+    return { ...DEFAULT_NATIVE_SNAPSHOT_CONFIG, include: ["**/*"], exclude: [] };
+  const snapshot2 = record(value, "native.snapshot");
+  rejectUnknown(snapshot2, SNAPSHOT_KEYS, "native.snapshot");
+  return {
+    include: snapshotPatterns(
+      snapshot2.include,
+      "native.snapshot.include",
+      DEFAULT_NATIVE_SNAPSHOT_CONFIG.include
+    ),
+    exclude: snapshotPatterns(
+      snapshot2.exclude,
+      "native.snapshot.exclude",
+      DEFAULT_NATIVE_SNAPSHOT_CONFIG.exclude
+    ),
+    max_files: positiveSnapshotInteger(
+      snapshot2.max_files,
+      DEFAULT_NATIVE_SNAPSHOT_CONFIG.max_files,
+      "native.snapshot.max_files"
+    ),
+    max_total_bytes: positiveSnapshotInteger(
+      snapshot2.max_total_bytes,
+      DEFAULT_NATIVE_SNAPSHOT_CONFIG.max_total_bytes,
+      "native.snapshot.max_total_bytes"
+    ),
+    max_duration_ms: positiveSnapshotInteger(
+      snapshot2.max_duration_ms,
+      DEFAULT_NATIVE_SNAPSHOT_CONFIG.max_duration_ms,
+      "native.snapshot.max_duration_ms"
+    )
+  };
+}
 function record(value, label) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${label} must be a mapping`);
@@ -8763,6 +8872,7 @@ function parseConfig(value) {
     throw new Error("native.clarification_mode must be sequential or batch");
   }
   const pending = parsePending(native.pending_root_move);
+  const snapshot2 = parseSnapshot(native.snapshot);
   return {
     schema: "comet.project.v1",
     default_workflow: root.default_workflow,
@@ -8772,6 +8882,7 @@ function parseConfig(value) {
       artifact_root: normalizeArtifactRootRef(native.artifact_root),
       language,
       clarification_mode: clarificationMode,
+      snapshot: snapshot2,
       ...pending ? { pending_root_move: pending } : {}
     }
   };
@@ -8784,7 +8895,8 @@ function defaultProjectConfig(artifactRoot = "docs", language = "en") {
     native: {
       artifact_root: normalizeArtifactRootRef(artifactRoot),
       language,
-      clarification_mode: "sequential"
+      clarification_mode: "sequential",
+      snapshot: { ...DEFAULT_NATIVE_SNAPSHOT_CONFIG, include: ["**/*"], exclude: [] }
     }
   };
 }
@@ -8853,6 +8965,7 @@ async function writeProjectConfig(projectRoot, config) {
       artifact_root: config.native.artifact_root,
       language: config.native.language,
       clarification_mode: config.native.clarification_mode,
+      snapshot: config.native.snapshot,
       ...config.native.pending_root_move ? {
         pending_root_move: {
           id: config.native.pending_root_move.id,
@@ -8880,6 +8993,7 @@ async function writeProjectConfig(projectRoot, config) {
       artifact_root: validated.native.artifact_root,
       language: validated.native.language,
       clarification_mode: validated.native.clarification_mode,
+      snapshot: validated.native.snapshot,
       ...validated.native.pending_root_move ? {
         pending_root_move: {
           id: validated.native.pending_root_move.id,
@@ -10177,9 +10291,17 @@ var MANIFEST_KEYS = /* @__PURE__ */ new Set([
   "entries",
   "omitted",
   "omittedCount",
-  "omissionOverflow"
+  "omissionOverflow",
+  "policy"
 ]);
-var LIMIT_KEYS = /* @__PURE__ */ new Set(["maxFiles", "maxFileBytes", "maxTotalBytes", "maxManifestBytes"]);
+var LIMIT_KEYS = /* @__PURE__ */ new Set([
+  "maxFiles",
+  "maxFileBytes",
+  "maxTotalBytes",
+  "maxManifestBytes",
+  "maxDurationMs"
+]);
+var POLICY_KEYS = /* @__PURE__ */ new Set(["schema", "include", "exclude", "hash"]);
 var CAPTURE_KEYS = /* @__PURE__ */ new Set(["provider", "gitSelection", "physicalSelection", "projection"]);
 var GIT_PROJECTION_KEYS = /* @__PURE__ */ new Set(["provider", "selection"]);
 var GIT_SELECTION_KEYS = /* @__PURE__ */ new Set([
@@ -11096,6 +11218,133 @@ function isChangedDuringReadError(error) {
 function serializedManifestBytes(manifest) {
   return Buffer.byteLength(JSON.stringify(manifest, null, 2) + "\n");
 }
+function snapshotPolicyHash(include, exclude) {
+  return sha256Text(
+    `comet.native.snapshot-policy.v1
+${JSON.stringify({ include, exclude, hash: "sha256" })}`
+  );
+}
+function epsilonClosure(tokens, positions, checkpoint) {
+  const closure = new Set(positions);
+  const pending = [...positions];
+  while (pending.length > 0) {
+    if (checkpoint && !checkpoint()) return null;
+    const position = pending.pop();
+    const token = tokens[position];
+    if (token && (token.kind === "star" || token.kind === "globstar" || token.kind === "globstar-slash") && !closure.has(position + 1)) {
+      closure.add(position + 1);
+      pending.push(position + 1);
+    }
+  }
+  return closure;
+}
+function cooperativePatternCheckpoint(hasBudget) {
+  let operationsUntilCheck = 0;
+  return () => {
+    if (operationsUntilCheck > 0) {
+      operationsUntilCheck -= 1;
+      return true;
+    }
+    if (!hasBudget()) return false;
+    operationsUntilCheck = 63;
+    return true;
+  };
+}
+function compileNativeSnapshotPattern(pattern) {
+  const normalized = normalizeNativeSnapshotPattern(pattern, "Native snapshot pattern");
+  const tokens = [];
+  for (let index = 0; index < normalized.length; index += 1) {
+    const character = normalized[index];
+    if (character === "*" && normalized[index + 1] === "*") {
+      index += 1;
+      if (normalized[index + 1] === "/") {
+        index += 1;
+        tokens.push({ kind: "globstar-slash" });
+      } else {
+        tokens.push({ kind: "globstar" });
+      }
+    } else if (character === "*") {
+      tokens.push({ kind: "star" });
+    } else if (character === "?") {
+      tokens.push({ kind: "question" });
+    } else {
+      tokens.push({ kind: "literal", value: character });
+    }
+  }
+  return (relative, hasBudget) => {
+    const checkpoint = hasBudget ? cooperativePatternCheckpoint(hasBudget) : void 0;
+    if (checkpoint && !checkpoint()) return false;
+    let positions = epsilonClosure(tokens, /* @__PURE__ */ new Set([0]), checkpoint);
+    if (positions === null) return false;
+    for (const character of relative) {
+      if (checkpoint && !checkpoint()) return false;
+      const next = /* @__PURE__ */ new Set();
+      for (const position of positions) {
+        if (checkpoint && !checkpoint()) return false;
+        const token = tokens[position];
+        if (!token) continue;
+        if (token.kind === "literal" && token.value === character) {
+          next.add(position + 1);
+        } else if (token.kind === "question" && character !== "/") {
+          next.add(position + 1);
+        } else if (token.kind === "star" && character !== "/") {
+          next.add(position);
+        } else if (token.kind === "globstar") {
+          next.add(position);
+        } else if (token.kind === "globstar-slash") {
+          next.add(position);
+          if (character === "/") next.add(position + 1);
+        }
+      }
+      positions = epsilonClosure(tokens, next, checkpoint);
+      if (positions === null) return false;
+      if (positions.size === 0) return false;
+    }
+    return epsilonClosure(tokens, positions, checkpoint)?.has(tokens.length) ?? false;
+  };
+}
+function resolveSnapshotPolicy(value) {
+  if (value === void 0) return void 0;
+  const include = [
+    ...new Set(value.include.map((item) => normalizeNativeSnapshotPattern(item, "include")))
+  ].sort((left, right) => left.localeCompare(right, "en"));
+  const exclude = [
+    ...new Set(value.exclude.map((item) => normalizeNativeSnapshotPattern(item, "exclude")))
+  ].sort((left, right) => left.localeCompare(right, "en"));
+  if (include.length === 0) throw new Error("Native snapshot policy include must not be empty");
+  const hash6 = snapshotPolicyHash(include, exclude);
+  if ("hash" in value && value.hash !== hash6) {
+    throw new Error("Native snapshot policy hash is invalid");
+  }
+  return {
+    manifest: {
+      schema: "comet.native.snapshot-policy.v1",
+      include,
+      exclude,
+      hash: hash6
+    },
+    includeMatchers: include.map(compileNativeSnapshotPattern),
+    excludeMatchers: exclude.map(compileNativeSnapshotPattern)
+  };
+}
+function snapshotPolicyIncludes(policy, relative, execution) {
+  if (!policy) return true;
+  const hasBudget = () => nativeSnapshotExecutionHasBudget(execution);
+  let included = false;
+  for (const matcher of policy.includeMatchers) {
+    if (!hasBudget()) return false;
+    if (matcher(relative, hasBudget)) {
+      included = true;
+      break;
+    }
+  }
+  if (!included) return false;
+  for (const matcher of policy.excludeMatchers) {
+    if (!hasBudget()) return false;
+    if (matcher(relative, hasBudget)) return false;
+  }
+  return true;
+}
 function foldSnapshotOverflowHash(previous, kind, value) {
   const payload = JSON.stringify(value);
   return sha256Text(
@@ -11463,8 +11712,28 @@ function parseNativeContentSnapshotManifest(value) {
     maxManifestBytes: positiveInteger(
       limitValue.maxManifestBytes,
       "Native snapshot maxManifestBytes"
-    )
+    ),
+    ...limitValue.maxDurationMs === void 0 ? {} : {
+      maxDurationMs: positiveInteger(limitValue.maxDurationMs, "Native snapshot maxDurationMs")
+    }
   };
+  let policy;
+  if (manifest.policy !== void 0) {
+    const policyValue = record3(manifest.policy, "Native snapshot policy");
+    rejectUnknown3(policyValue, POLICY_KEYS, "Native snapshot policy");
+    if (policyValue.schema !== "comet.native.snapshot-policy.v1") {
+      throw new Error("Native snapshot policy schema is invalid");
+    }
+    if (!Array.isArray(policyValue.include) || !Array.isArray(policyValue.exclude)) {
+      throw new Error("Native snapshot policy patterns must be arrays");
+    }
+    policy = resolveSnapshotPolicy({
+      include: policyValue.include,
+      exclude: policyValue.exclude,
+      hash: policyValue.hash,
+      schema: "comet.native.snapshot-policy.v1"
+    }).manifest;
+  }
   if (!Array.isArray(manifest.entries) || !Array.isArray(manifest.omitted)) {
     throw new Error("Native content snapshot entries and omissions must be arrays");
   }
@@ -11547,6 +11816,7 @@ function parseNativeContentSnapshotManifest(value) {
     createdAt: manifest.createdAt,
     complete: manifest.complete,
     limits,
+    ...policy ? { policy } : {},
     entries,
     omitted,
     omittedCount,
@@ -11687,13 +11957,18 @@ function nativeBaselineManifestFile(paths, name) {
   return path10.join(changeDir, "runtime", "baseline-manifest.json");
 }
 async function createNativeContentSnapshot(paths, options = {}) {
-  const execution = createNativeSnapshotExecution(options);
   const limits = {
     maxFiles: options.limits?.maxFiles ?? DEFAULT_NATIVE_SNAPSHOT_LIMITS.maxFiles,
     maxFileBytes: options.limits?.maxFileBytes ?? DEFAULT_NATIVE_SNAPSHOT_LIMITS.maxFileBytes,
     maxTotalBytes: options.limits?.maxTotalBytes ?? DEFAULT_NATIVE_SNAPSHOT_LIMITS.maxTotalBytes,
-    maxManifestBytes: options.limits?.maxManifestBytes ?? DEFAULT_NATIVE_SNAPSHOT_LIMITS.maxManifestBytes
+    maxManifestBytes: options.limits?.maxManifestBytes ?? DEFAULT_NATIVE_SNAPSHOT_LIMITS.maxManifestBytes,
+    ...options.limits?.maxDurationMs === void 0 ? {} : { maxDurationMs: options.limits.maxDurationMs }
   };
+  const policy = resolveSnapshotPolicy(options.policy);
+  const execution = createNativeSnapshotExecution({
+    ...options,
+    deadlineMs: options.deadlineMs ?? limits.maxDurationMs
+  });
   const gitSelectionLimits = resolveNativeGitSelectionLimits(options.gitSelectionLimits);
   const physicalSelectionLimits = resolveNativePhysicalSelectionLimits(
     options.physicalSelectionLimits
@@ -12052,6 +12327,8 @@ async function createNativeContentSnapshot(paths, options = {}) {
     for (const record8 of before.records) {
       if (record8.type !== "file" && record8.type !== "symlink") continue;
       if (remainingNativeSnapshotTime(execution) < 1) break;
+      if (!snapshotPolicyIncludes(policy, record8.path, execution)) continue;
+      if (remainingNativeSnapshotTime(execution) < 1) break;
       const target = path10.resolve(projectRoot, ...record8.path.split("/"));
       let stat;
       try {
@@ -12108,6 +12385,9 @@ async function createNativeContentSnapshot(paths, options = {}) {
     await options.gitSelectionHooks?.afterInitialSelection?.();
     for (const relative of selectionPaths(gitSelection)) {
       if (!isSnapshotProjectRef(paths, relative)) continue;
+      if (remainingNativeSnapshotTime(execution) < 1) break;
+      if (!snapshotPolicyIncludes(policy, relative, execution)) continue;
+      if (remainingNativeSnapshotTime(execution) < 1) break;
       const target = path10.resolve(projectRoot, ...relative.split("/"));
       if (target === configFile || target === selectionFile || denylist.some((denied) => sameOrInside(denied, target))) {
         continue;
@@ -12232,6 +12512,7 @@ async function createNativeContentSnapshot(paths, options = {}) {
     createdAt: (options.now ?? /* @__PURE__ */ new Date()).toISOString(),
     complete: omittedCount === 0,
     limits,
+    ...policy ? { policy: policy.manifest } : {},
     entries,
     omitted,
     omittedCount,
@@ -12267,6 +12548,21 @@ async function createNativeContentSnapshot(paths, options = {}) {
     manifest = buildManifest();
   }
   return manifest;
+}
+async function createNativeCurrentContentSnapshot(paths, baseline, options = {}) {
+  const config = await readProjectConfig(paths.projectRoot);
+  const settings = config?.native.snapshot ?? DEFAULT_NATIVE_SNAPSHOT_CONFIG;
+  return createNativeContentSnapshot(paths, {
+    ...options,
+    policy: baseline.policy,
+    limits: {
+      maxFiles: settings.max_files,
+      maxFileBytes: settings.max_total_bytes,
+      maxTotalBytes: settings.max_total_bytes,
+      maxDurationMs: settings.max_duration_ms
+    },
+    deadlineMs: settings.max_duration_ms
+  });
 }
 async function writeNativeBaselineManifest(paths, name, manifest) {
   const file = nativeBaselineManifestFile(paths, name);
@@ -13312,15 +13608,17 @@ var NativeChangeRevisionConflictError = class extends Error {
   code = "native-change-revision-conflict";
 };
 var NativeBaselineIncompleteError = class extends Error {
-  constructor(change, omittedCount, omittedByReason, samplePaths, sampleTruncated) {
+  constructor(change, omittedCount, omittedByReason, samplePaths, sampleTruncated, effectiveLimits = null, policyHash = null) {
     super(
-      `Native change ${change} baseline is incomplete (${omittedCount} omitted entr${omittedCount === 1 ? "y" : "ies"})`
+      `Native change ${change} baseline is incomplete (${omittedCount} omitted entr${omittedCount === 1 ? "y" : "ies"}). Adjust native.snapshot scope or resource budgets in .comet/config.yaml, then retry.`
     );
     this.change = change;
     this.omittedCount = omittedCount;
     this.omittedByReason = omittedByReason;
     this.samplePaths = samplePaths;
     this.sampleTruncated = sampleTruncated;
+    this.effectiveLimits = effectiveLimits;
+    this.policyHash = policyHash;
     this.name = "NativeBaselineIncompleteError";
   }
   change;
@@ -13328,6 +13626,8 @@ var NativeBaselineIncompleteError = class extends Error {
   omittedByReason;
   samplePaths;
   sampleTruncated;
+  effectiveLimits;
+  policyHash;
   code = "native-baseline-incomplete";
 };
 var NATIVE_BRIEF_TEMPLATE = [
@@ -13763,9 +14063,19 @@ async function createNativeChangeLocked(options) {
       fs13.mkdir(path16.join(changeDir, "runtime", "checkpoints"), { recursive: true }),
       atomicWriteText(path16.join(changeDir, "brief.md"), NATIVE_BRIEF_TEMPLATE)
     ]);
+    const projectConfig = await readProjectConfig(options.paths.projectRoot);
+    const snapshot2 = projectConfig?.native.snapshot ?? DEFAULT_NATIVE_SNAPSHOT_CONFIG;
     const baseline = await createNativeContentSnapshot(options.paths, {
       now: options.now,
-      origin: "change-created"
+      origin: "change-created",
+      policy: snapshot2,
+      limits: {
+        maxFiles: snapshot2.max_files,
+        maxFileBytes: snapshot2.max_total_bytes,
+        maxTotalBytes: snapshot2.max_total_bytes,
+        maxDurationMs: snapshot2.max_duration_ms
+      },
+      deadlineMs: snapshot2.max_duration_ms
     });
     if (!baseline.complete) {
       const health = inspectNativeContentSnapshotHealth(baseline);
@@ -13780,7 +14090,9 @@ async function createNativeChangeLocked(options) {
         baseline.omittedCount,
         omittedByReason,
         health.samplePaths,
-        health.sampleTruncated
+        health.sampleTruncated,
+        baseline.limits,
+        baseline.policy?.hash ?? null
       );
     }
     await writeNativeBaselineManifest(options.paths, state.name, baseline);
@@ -14867,8 +15179,10 @@ function snapshotProjection(manifest) {
       maxFiles: parsed.limits.maxFiles,
       maxFileBytes: parsed.limits.maxFileBytes,
       maxTotalBytes: parsed.limits.maxTotalBytes,
-      maxManifestBytes: parsed.limits.maxManifestBytes
+      maxManifestBytes: parsed.limits.maxManifestBytes,
+      ...parsed.limits.maxDurationMs === void 0 ? {} : { maxDurationMs: parsed.limits.maxDurationMs }
     },
+    ...parsed.policy ? { policy: parsed.policy } : {},
     entries,
     omitted,
     omittedCount: parsed.omittedCount,
@@ -15346,7 +15660,7 @@ function parseNativeSnapshotProjection(value, expectedHash) {
   exactScopeKeys(
     root,
     ["schema", "origin", "complete", "limits", "entries", "omitted", "omittedCount"],
-    ["capture", "omissionOverflow"],
+    ["capture", "omissionOverflow", "policy"],
     "Native snapshot projection"
   );
   if (root.schema !== NATIVE_SNAPSHOT_PROJECTION_SCHEMA) {
@@ -15359,6 +15673,7 @@ function parseNativeSnapshotProjection(value, expectedHash) {
     createdAt: "1970-01-01T00:00:00.000Z",
     complete: root.complete,
     limits: root.limits,
+    ...root.policy === void 0 ? {} : { policy: root.policy },
     entries: root.entries,
     omitted: root.omitted,
     omittedCount: root.omittedCount,
@@ -16376,7 +16691,7 @@ function assertEvidenceDocumentBudget(value) {
 function serializedEvidenceBytes2(value) {
   return Buffer.byteLength(JSON.stringify(value, null, 2) + "\n", "utf8");
 }
-function parseSnapshot(value, expectedHash) {
+function parseSnapshot2(value, expectedHash) {
   return parseNativeSnapshotProjection(value, expectedHash);
 }
 function parseScope(value, expectedHash) {
@@ -16452,10 +16767,10 @@ async function readNativeImplementationScopeBundle(paths, name, ref, hooks) {
   const currentHash = parseEvidenceRef(scope.currentProjectionRef, "snapshots");
   const [baseline, current] = await Promise.all([
     readEvidenceDocument({ paths, name, kind: "snapshots", hash: baselineHash }).then(
-      (value) => parseSnapshot(value, baselineHash)
+      (value) => parseSnapshot2(value, baselineHash)
     ),
     readEvidenceDocument({ paths, name, kind: "snapshots", hash: currentHash }).then(
-      (value) => parseSnapshot(value, currentHash)
+      (value) => parseSnapshot2(value, currentHash)
     )
   ]);
   return rebuildNativeImplementationScopeBundle({ baseline, current, scope });
@@ -19226,6 +19541,7 @@ function projectionManifest(projection) {
     createdAt: "1970-01-01T00:00:00.000Z",
     complete: projection.complete,
     limits: projection.limits,
+    ...projection.policy ? { policy: projection.policy } : {},
     entries: projection.entries,
     omitted: projection.omitted,
     omittedCount: projection.omittedCount,
@@ -19240,12 +19556,13 @@ function nativeRootRef2(paths) {
   return value;
 }
 async function currentProjectionHash(options) {
-  const current = await createNativeContentSnapshot(options.paths, {
+  const baseline = projectionManifest(options.bundle.baseline);
+  const current = await createNativeCurrentContentSnapshot(options.paths, baseline, {
     origin: "explicit",
     now: options.now
   });
   return buildNativeImplementationScopeBundle({
-    baseline: projectionManifest(options.bundle.baseline),
+    baseline,
     current,
     contractHash: options.bundle.scope.contractHash,
     declaredArtifacts: options.bundle.scope.declaredArtifacts,
@@ -22134,8 +22451,12 @@ async function inspectNativeRunConsistency(paths, state) {
 // domains/comet-native/native-continuation.ts
 var REPAIR_CODES = /^(?:run-|trajectory-|checkpoint-(?:missing|mismatch|invalid|progress-invalid)|transition-(?:incomplete|invalid))/u;
 function requiredPhaseInputs(state) {
-  if (state.phase === "shape") return ["summary"];
-  if (state.phase === "build") return ["summary", "artifact-or-no-code-reason"];
+  if (state.phase === "shape") {
+    return ["summary", "shared-understanding-confirmation"];
+  }
+  if (state.phase === "build") {
+    return state.approval === "confirmed" ? ["summary", "artifact-or-no-code-reason"] : ["summary", "artifact-or-no-code-reason", "shared-understanding-confirmation"];
+  }
   if (state.phase === "verify") return ["summary", "verification-result", "verification-report"];
   return [];
 }
@@ -22266,6 +22587,7 @@ function nativeContinuation(options) {
       requiredInputs: options.archiveReady ? [] : ["archive-readiness"]
     };
   }
+  const confirmationSuffix = options.state.phase === "shape" || options.state.phase === "build" && options.state.approval !== "confirmed" ? " --confirmed" : "";
   return {
     schema: "comet.native.continuation.v1",
     skill: "comet-native",
@@ -22274,7 +22596,7 @@ function nativeContinuation(options) {
     revision: options.state.revision,
     disposition: "continue",
     action: "advance-phase",
-    command: `comet native next ${options.state.name} --summary "<summary>"`,
+    command: `comet native next ${options.state.name} --summary "<summary>"${confirmationSuffix}`,
     requiresUserDecision: false,
     requiredInputs: requiredPhaseInputs(options.state)
   };
@@ -22287,6 +22609,18 @@ var EXACT_METADATA = {
   "brief-blocking-question": {
     severity: "error",
     requiredAction: "answer-blocking-question",
+    retry: "next",
+    repair: "none"
+  },
+  "shape-confirmation-required": {
+    severity: "error",
+    requiredAction: "confirm-shared-understanding",
+    retry: "next",
+    repair: "none"
+  },
+  "approval-confirmation-required": {
+    severity: "error",
+    requiredAction: "confirm-shared-understanding",
     retry: "next",
     repair: "none"
   },
@@ -22461,7 +22795,7 @@ function projectRelativePath3(paths, state, finding) {
 }
 function retryCommand(retry, state, code) {
   if (retry === "next") {
-    return `comet native next ${state.name} --summary "<summary>"${code === "contract-changed-after-approval" ? " --confirmed" : ""}`;
+    return `comet native next ${state.name} --summary "<summary>"${code === "contract-changed-after-approval" || code === "shape-confirmation-required" || code === "approval-confirmation-required" ? " --confirmed" : ""}`;
   }
   if (retry === "status") return `comet native status ${state.name} --details`;
   return null;
@@ -22479,7 +22813,7 @@ function structureNativeFindings(options) {
       repairCommand: metadata.repair === "doctor" ? `comet native doctor ${options.state.name} --repair${finding.code.startsWith("transition-") ? " --strategy continue" : ""}` : null,
       // This is intentionally code-based, not severity-based. Model-actionable
       // missing data must never be presented as a user decision.
-      requiresUserDecision: finding.code === "brief-blocking-question" || finding.code === "contract-changed-after-approval" || finding.code === "verification-scope-partial" || finding.code === "repair-iteration-limit" || finding.code === "repair-override-exhausted"
+      requiresUserDecision: finding.code === "brief-blocking-question" || finding.code === "shape-confirmation-required" || finding.code === "approval-confirmation-required" || finding.code === "contract-changed-after-approval" || finding.code === "verification-scope-partial" || finding.code === "repair-iteration-limit" || finding.code === "repair-override-exhausted"
     };
   }).sort((left, right) => {
     const severityRank = { error: 0, warning: 1, info: 2 };
@@ -22793,11 +23127,11 @@ async function selectedName(paths) {
     return null;
   }
 }
-function nativeNextCommand(state, archiveReady, evidenceRetreat = false) {
+function nativeNextCommand(state, archiveReady, evidenceRetreat = false, _clarificationMode) {
   if (state.phase === "archive") {
     return archiveReady ? `comet native archive ${state.name} --dry-run` : evidenceRetreat ? `comet native next ${state.name} --summary "<summary>"` : null;
   }
-  return `comet native next ${state.name} --summary "<summary>"`;
+  return `comet native next ${state.name} --summary "<summary>"${state.phase === "shape" || state.phase === "build" && state.approval !== "confirmed" ? " --confirmed" : ""}`;
 }
 async function statusFindings(paths, state) {
   const changeDir = nativeChangeDir(paths, state.name);
@@ -23128,13 +23462,19 @@ async function inspectNativeStatus(paths, name, options) {
     verificationResult: state.verification_result,
     specChanges: state.spec_changes.length,
     selected,
-    nextCommand: mutationBlocked || repairBlocked ? null : nativeNextCommand(state, archiveReady, evidenceRetreat),
+    nextCommand: mutationBlocked || repairBlocked ? null : nativeNextCommand(state, archiveReady, evidenceRetreat, options?.clarificationMode),
     archiveReady,
     inspection: resume.inspection,
     findingSummary: summarizeNativeFindings(findings),
     detailsCommand: `comet native status ${state.name} --details`,
     checkpoint: resume.checkpoint,
-    continuation: nativeContinuation({ state, findings, archiveReady, evidenceRetreat }),
+    continuation: nativeContinuation({
+      state,
+      findings,
+      archiveReady,
+      evidenceRetreat,
+      clarificationMode: options?.clarificationMode
+    }),
     repair,
     ...options?.details ? {
       ...acceptancePage ? { acceptancePage } : {},
@@ -23217,7 +23557,11 @@ async function listNativeStatusPage(paths, options) {
     cursor: options?.cursor
   });
   const candidates = await Promise.all(
-    names.slice(offset, offset + NATIVE_STATUS_PAGE_LIMITS.maxItems).map((name) => inspectNativeStatus(paths, name))
+    names.slice(offset, offset + NATIVE_STATUS_PAGE_LIMITS.maxItems).map(
+      (name) => inspectNativeStatus(paths, name, {
+        clarificationMode: options?.clarificationMode
+      })
+    )
   );
   const items = [];
   for (const candidate of candidates) {
@@ -23249,8 +23593,10 @@ async function listNativeStatusPage(paths, options) {
     limits: { ...NATIVE_STATUS_PAGE_LIMITS }
   };
 }
-async function listNativeStatus(paths) {
-  return (await listNativeStatusPage(paths)).items;
+async function listNativeStatus(paths, options) {
+  return (await listNativeStatusPage(paths, {
+    clarificationMode: options?.clarificationMode
+  })).items;
 }
 
 // domains/comet-native/native-doctor.ts
@@ -25558,7 +25904,8 @@ async function finishForwardMove(options) {
   const stableNative = {
     artifact_root: config.native.artifact_root,
     language: config.native.language,
-    clarification_mode: config.native.clarification_mode
+    clarification_mode: config.native.clarification_mode,
+    snapshot: config.native.snapshot
   };
   const committed = {
     ...config,
@@ -25701,7 +26048,8 @@ async function recoverNativeRootMove(options) {
     const stableNative = {
       artifact_root: config.native.artifact_root,
       language: config.native.language,
-      clarification_mode: config.native.clarification_mode
+      clarification_mode: config.native.clarification_mode,
+      snapshot: config.native.snapshot
     };
     const restored = {
       ...config,
@@ -26445,6 +26793,7 @@ function projectionManifest2(projection) {
     createdAt: "1970-01-01T00:00:00.000Z",
     complete: projection.complete,
     limits: projection.limits,
+    ...projection.policy ? { policy: projection.policy } : {},
     entries: projection.entries,
     omitted: projection.omitted,
     omittedCount: projection.omittedCount,
@@ -26452,16 +26801,17 @@ function projectionManifest2(projection) {
   };
 }
 async function collectBoundFacts(options) {
+  const baseline = projectionManifest2(options.scope.baseline);
   const [contract, snapshot2] = await Promise.all([
     collectNativeContractFiles({
       changeDir: nativeChangeDir(options.paths, options.state.name),
       briefRef: options.state.brief,
       specChanges: options.state.spec_changes
     }),
-    createNativeContentSnapshot(options.paths, { origin: "explicit" })
+    createNativeCurrentContentSnapshot(options.paths, baseline, { origin: "explicit" })
   ]);
   const currentBundle = buildNativeImplementationScopeBundle({
-    baseline: projectionManifest2(options.scope.baseline),
+    baseline,
     current: snapshot2,
     contractHash: options.scope.authority.contractHash,
     declaredArtifacts: options.scope.authority.declaredArtifacts,
@@ -27315,12 +27665,24 @@ async function inspectNativeGuard(options) {
     const brief = await validateNativeBrief(changeDir, options.state.brief);
     const specs = await validateNativeSpecChanges(options.paths, options.state);
     findings.push(...brief.findings, ...specs.findings);
+    if (findings.length === 0 && !options.evidence.confirmed) {
+      findings.push({
+        code: "shape-confirmation-required",
+        message: "Native clarification requires explicit user confirmation of the shared understanding before Build"
+      });
+    }
   } else if (options.state.phase === "build") {
     findings.push(
       ...(await validateNativeBrief(changeDir, options.state.brief)).findings,
       ...(await validateNativeSpecChanges(options.paths, options.state)).findings
     );
     findings.push(...await validateBuildArtifacts(options.paths, options.evidence));
+    if (findings.length === 0 && options.state.approval !== "confirmed" && !options.evidence.confirmed) {
+      findings.push({
+        code: "approval-confirmation-required",
+        message: "Native approval is implicit; confirm the current shared understanding before leaving Build"
+      });
+    }
   } else if (options.state.phase === "verify") {
     const report = options.evidence.verificationReport ?? options.state.verification_report;
     if (!report) {
@@ -27499,7 +27861,7 @@ async function inspectNativeBuildEvidence(options) {
     baseline,
     refs: options.artifactRefs
   });
-  const current = await createNativeContentSnapshot(options.paths, {
+  const current = await createNativeCurrentContentSnapshot(options.paths, baseline, {
     origin: "explicit",
     now: options.now
   });
@@ -27697,7 +28059,8 @@ async function retreatStaleNativeEvidence(options) {
       findings,
       continuation: nativeContinuation({
         state: options.state,
-        archiveReady: previousPhase === "archive"
+        archiveReady: previousPhase === "archive",
+        clarificationMode: options.transition.clarificationMode
       })
     };
   }
@@ -27752,7 +28115,10 @@ async function retreatStaleNativeEvidence(options) {
     next: "auto",
     nextCommand: null,
     findings: [],
-    continuation: nativeContinuation({ state: persisted })
+    continuation: nativeContinuation({
+      state: persisted,
+      clarificationMode: options.transition.clarificationMode
+    })
   };
 }
 async function advanceNativeChange(options) {
@@ -27799,7 +28165,8 @@ async function advanceNativeChangeLocked(options) {
         continuation: nativeContinuation({
           state,
           findings: repairFindings2,
-          archiveReady: state.phase === "archive" && state.verification_result === "pass"
+          archiveReady: state.phase === "archive" && state.verification_result === "pass",
+          clarificationMode: options.clarificationMode
         }),
         ...repair ? { repair } : {}
       };
@@ -27838,7 +28205,8 @@ async function advanceNativeChangeLocked(options) {
   const guard = await inspectNativeGuard({
     paths: options.paths,
     state: candidate,
-    evidence: options.evidence
+    evidence: options.evidence,
+    clarificationMode: options.clarificationMode
   });
   if (!guard.valid) {
     const findings = structureNativeFindings({
@@ -27852,7 +28220,11 @@ async function advanceNativeChangeLocked(options) {
       next: "manual",
       nextCommand: null,
       findings,
-      continuation: nativeContinuation({ state, findings })
+      continuation: nativeContinuation({
+        state,
+        findings,
+        clarificationMode: options.clarificationMode
+      })
     };
   }
   const shapeContract = state.phase === "shape" ? await collectNativeContractFiles({
@@ -27891,7 +28263,11 @@ async function advanceNativeChangeLocked(options) {
       next: "manual",
       nextCommand: null,
       findings,
-      continuation: nativeContinuation({ state, findings })
+      continuation: nativeContinuation({
+        state,
+        findings,
+        clarificationMode: options.clarificationMode
+      })
     };
   }
   const preparedScope = buildEvidence ? {
@@ -27923,7 +28299,11 @@ async function advanceNativeChangeLocked(options) {
       next: "manual",
       nextCommand: null,
       findings,
-      continuation: nativeContinuation({ state, findings }),
+      continuation: nativeContinuation({
+        state,
+        findings,
+        clarificationMode: options.clarificationMode
+      }),
       preparedScope
     };
   }
@@ -27968,7 +28348,11 @@ async function advanceNativeChangeLocked(options) {
         next: "manual",
         nextCommand: null,
         findings,
-        continuation: nativeContinuation({ state, findings }),
+        continuation: nativeContinuation({
+          state,
+          findings,
+          clarificationMode: options.clarificationMode
+        }),
         preparedScope: preparedScope ? { ...preparedScope, partialAllowanceRef: null } : preparedScope
       };
     }
@@ -27997,7 +28381,11 @@ async function advanceNativeChangeLocked(options) {
       next: "manual",
       nextCommand: null,
       findings,
-      continuation: nativeContinuation({ state, findings })
+      continuation: nativeContinuation({
+        state,
+        findings,
+        clarificationMode: options.clarificationMode
+      })
     };
   }
   let repairDecision = null;
@@ -28052,7 +28440,7 @@ async function advanceNativeChangeLocked(options) {
     ...candidate,
     revision: state.revision + 1,
     phase: advanced.currentStep,
-    approval: options.evidence.confirmed ? "confirmed" : state.phase === "shape" && state.approval === null ? "implicit" : state.approval,
+    approval: options.evidence.confirmed ? "confirmed" : state.approval,
     approved_contract_hash: state.phase === "shape" ? shapeContract.contract.contractHash : state.phase === "build" && options.evidence.confirmed ? buildEvidence.contract.contract.contractHash : state.approved_contract_hash ?? null,
     run_id: run.runId,
     ...state.phase === "build" ? {
@@ -28129,7 +28517,8 @@ async function advanceNativeChangeLocked(options) {
     continuation: nativeContinuation({
       state: persisted,
       findings: repairFindings,
-      archiveReady: persisted.phase === "archive" && persisted.verification_result === "pass"
+      archiveReady: persisted.phase === "archive" && persisted.verification_result === "pass",
+      clarificationMode: options.clarificationMode
     }),
     ...preparedScope ? { preparedScope } : {},
     ...repairDecision ? { repair: repairDecision } : {}
@@ -28647,7 +29036,9 @@ async function dispatch(rawArgs, explicitProjectRoot) {
     await ensureNativeDirectories(paths);
     const state = await createNativeChange({ paths, name, language });
     await selectNativeChange(paths, state.name);
-    const status = await inspectNativeStatus(paths, state.name);
+    const status = await inspectNativeStatus(paths, state.name, {
+      clarificationMode: config.native.clarification_mode
+    });
     return success(
       "new",
       { ...state, continuation: status.continuation },
@@ -28661,9 +29052,11 @@ async function dispatch(rawArgs, explicitProjectRoot) {
       const name = requiredPositional(rawArgs, "change name");
       const capability = requiredPositional(rawArgs, "capability");
       assertNoArguments(rawArgs);
-      const { paths } = await configuredPaths(projectRoot);
+      const { config, paths } = await configuredPaths(projectRoot);
       const state = await markNativeSpecRemoval(paths, name, capability);
-      const status = await inspectNativeStatus(paths, state.name);
+      const status = await inspectNativeStatus(paths, state.name, {
+        clarificationMode: config.native.clarification_mode
+      });
       return success(
         "spec remove",
         { ...state, continuation: status.continuation },
@@ -28676,9 +29069,11 @@ async function dispatch(rawArgs, explicitProjectRoot) {
       const summary = takeOption(rawArgs, "--summary");
       if (!summary) throw new NativeUsageError("--summary is required");
       assertNoArguments(rawArgs);
-      const { paths } = await configuredPaths(projectRoot);
+      const { config, paths } = await configuredPaths(projectRoot);
       const state = await rebaseNativeSpecChanges({ paths, name, summary });
-      const status = await inspectNativeStatus(paths, state.name);
+      const status = await inspectNativeStatus(paths, state.name, {
+        clarificationMode: config.native.clarification_mode
+      });
       return success(
         "spec rebase",
         { ...state, continuation: status.continuation },
@@ -28691,8 +29086,11 @@ async function dispatch(rawArgs, explicitProjectRoot) {
   if (command === "list") {
     const cursor = takeOption(rawArgs, "--cursor");
     assertNoArguments(rawArgs);
-    const { paths } = await configuredPaths(projectRoot);
-    const page = await listNativeStatusPage(paths, cursor ? { cursor } : void 0);
+    const { config, paths } = await configuredPaths(projectRoot);
+    const page = await listNativeStatusPage(paths, {
+      ...cursor ? { cursor } : {},
+      clarificationMode: config.native.clarification_mode
+    });
     return success("list", page);
   }
   if (command === "show") {
@@ -28748,19 +29146,25 @@ async function dispatch(rawArgs, explicitProjectRoot) {
       throw new NativeUsageError("--acceptance-cursor requires a change name");
     }
     assertNoArguments(rawArgs);
-    const { paths } = await configuredPaths(projectRoot);
+    const { config, paths } = await configuredPaths(projectRoot);
     const data = name ? await inspectNativeStatus(paths, name, {
       details,
-      ...acceptanceCursor2 ? { acceptanceCursor: acceptanceCursor2 } : {}
-    }) : await listNativeStatusPage(paths, cursor ? { cursor } : void 0);
+      ...acceptanceCursor2 ? { acceptanceCursor: acceptanceCursor2 } : {},
+      clarificationMode: config.native.clarification_mode
+    }) : await listNativeStatusPage(paths, {
+      ...cursor ? { cursor } : {},
+      clarificationMode: config.native.clarification_mode
+    });
     return success("status", data);
   }
   if (command === "select") {
     const name = requiredPositional(rawArgs, "change name");
     assertNoArguments(rawArgs);
-    const { paths } = await configuredPaths(projectRoot);
+    const { config, paths } = await configuredPaths(projectRoot);
     await selectNativeChange(paths, name);
-    const status = await inspectNativeStatus(paths, name);
+    const status = await inspectNativeStatus(paths, name, {
+      clarificationMode: config.native.clarification_mode
+    });
     return success(
       "select",
       { selected: name, continuation: status.continuation },
@@ -28777,7 +29181,7 @@ async function dispatch(rawArgs, explicitProjectRoot) {
     const artifacts = takeMany(rawArgs, "--artifact");
     const expectedRevision = revisionOption(rawArgs);
     assertNoArguments(rawArgs);
-    const { paths } = await configuredPaths(projectRoot);
+    const { config, paths } = await configuredPaths(projectRoot);
     const result2 = await checkpointNativeChange({
       paths,
       name,
@@ -28786,7 +29190,9 @@ async function dispatch(rawArgs, explicitProjectRoot) {
       artifacts,
       expectedRevision
     });
-    const status = await inspectNativeStatus(paths, name);
+    const status = await inspectNativeStatus(paths, name, {
+      clarificationMode: config.native.clarification_mode
+    });
     const manifestRef = path47.relative(
       paths.projectRoot,
       path47.join(nativeChangeDir(paths, name), ...result2.checkpoint.manifestRef.split("/"))
@@ -28910,7 +29316,7 @@ async function dispatch(rawArgs, explicitProjectRoot) {
       throw new NativeUsageError("--override-repair cannot be combined with --result");
     }
     assertNoArguments(rawArgs);
-    const { paths } = await configuredPaths(projectRoot);
+    const { config, paths } = await configuredPaths(projectRoot);
     const evidence = {
       summary,
       ...confirmed ? { confirmed: true } : {},
@@ -28926,7 +29332,12 @@ async function dispatch(rawArgs, explicitProjectRoot) {
       ...repairOverrideSignature ? { repairOverrideSignature } : {},
       ...repairOverrideSummary ? { repairOverrideSummary } : {}
     };
-    const result2 = await advanceNativeChange({ paths, name, evidence });
+    const result2 = await advanceNativeChange({
+      paths,
+      name,
+      evidence,
+      clarificationMode: config.native.clarification_mode
+    });
     if (result2.next === "manual") {
       const repairBlocked = result2.repair?.disposition === "manual-stop" || result2.repair?.disposition === "hard-stop" || result2.findings.some(
         (finding) => [
@@ -28945,7 +29356,9 @@ async function dispatch(rawArgs, explicitProjectRoot) {
         }
       };
     }
-    const status = await inspectNativeStatus(paths, name);
+    const status = await inspectNativeStatus(paths, name, {
+      clarificationMode: config.native.clarification_mode
+    });
     return success("next", { ...result2, continuation: status.continuation });
   }
   if (command === "archive") {
@@ -29062,6 +29475,13 @@ function errorResult(command, error) {
         omittedByReason: error.omittedByReason,
         samplePaths: error.samplePaths,
         sampleTruncated: error.sampleTruncated,
+        effectiveLimits: error.effectiveLimits,
+        policyHash: error.policyHash,
+        configPath: ".comet/config.yaml",
+        supportedFixes: [
+          "increase native.snapshot.max_total_bytes or native.snapshot.max_duration_ms",
+          "add an explicit native.snapshot.exclude pattern for data outside implementation scope"
+        ],
         requiredAction: "resolve-native-baseline"
       },
       error: { code: "baseline-incomplete", message: error.message }
