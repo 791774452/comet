@@ -140,6 +140,7 @@ Classic 专属默认值统一收纳在 `classic:` 块中；旧顶层字段会在
 
 ```yaml
 classic:
+  artifact_layout: docs
   language: zh-CN
   context_compression: off
   review_mode: standard
@@ -726,23 +727,29 @@ your-project/
 │   ├── comet-*/SKILL.md
 │   ├── openspec-*/SKILL.md
 │   └── brainstorming/SKILL.md
-├── openspec/                    # OpenSpec — WHAT
-│   ├── config.yaml
-│   └── changes/
-│       └── <name>/
-│           ├── .openspec.yaml       # OpenSpec 状态
-│           ├── .comet.yaml          # Comet 工作流状态（Classic 字段 + run_id 关联）
-│           ├── .comet/
-│           │   ├── run-state.json   # Engine Run 状态（机器所有，自动迁移）
-│           │   └── state-events.jsonl # 状态转移审计日志（追加式）
-│           ├── proposal.md
-│           ├── design.md
-│           ├── specs/<capability>/spec.md
-│           └── tasks.md
-└── docs/superpowers/            # Superpowers — HOW
-    ├── specs/                   # 设计文档
-    └── plans/                   # 实现计划
+└── docs/
+    ├── openspec/                    # OpenSpec — WHAT（classic.artifact_layout: docs）
+    │   ├── config.yaml
+    │   ├── specs/<capability>/spec.md # 归档后的主 spec
+    │   └── changes/
+    │       ├── archive/YYYY-MM-DD-<name>/ # 已归档 change
+    │       └── <name>/
+    │           ├── .openspec.yaml       # OpenSpec 状态
+    │           ├── .comet.yaml          # Comet 工作流状态（Classic 字段 + run_id 关联）
+    │           ├── .comet/
+    │           │   ├── run-state.json   # Engine Run 状态（机器所有，自动迁移）
+    │           │   └── state-events.jsonl # 状态转移审计日志（追加式）
+    │           ├── proposal.md
+    │           ├── design.md
+    │           ├── specs/<capability>/spec.md
+    │           └── tasks.md
+    └── superpowers/                 # Superpowers — HOW
+        ├── specs/                   # 设计文档
+        ├── plans/                   # 实现计划
+        └── reports/                 # 验证报告
 ```
+
+新建的 Classic 和双工作流项目默认使用 `classic.artifact_layout: docs`。保留旧布局的项目继续把 OpenSpec 根目录放在仓库根的 `openspec/`，Superpowers 产物仍位于 `docs/superpowers/`。可用 `comet classic root show` 查看当前布局；迁移时先运行 `comet classic root move docs --dry-run`，再按计划执行 `--apply`，不要只修改配置字段。
 
 </details>
 

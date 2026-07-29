@@ -157,6 +157,7 @@ Classic-specific defaults live under `classic:`. The next `comet init` or `comet
 
 ```yaml
 classic:
+  artifact_layout: docs
   language: en
   context_compression: off
   review_mode: standard
@@ -769,23 +770,29 @@ your-project/
 │   ├── comet-*/SKILL.md
 │   ├── openspec-*/SKILL.md
 │   └── brainstorming/SKILL.md
-├── openspec/                    # OpenSpec — WHAT
-│   ├── config.yaml
-│   └── changes/
-│       └── <name>/
-│           ├── .openspec.yaml       # OpenSpec state
-│           ├── .comet.yaml          # Comet workflow state (Classic fields + run_id link)
-│           ├── .comet/
-│           │   ├── run-state.json   # Engine Run state (machine-owned, auto-migrated)
-│           │   └── state-events.jsonl # State transition audit log (append-only)
-│           ├── proposal.md
-│           ├── design.md
-│           ├── specs/<capability>/spec.md
-│           └── tasks.md
-└── docs/superpowers/            # Superpowers — HOW
-    ├── specs/                   # Design documents
-    └── plans/                   # Implementation plans
+└── docs/
+    ├── openspec/                    # OpenSpec — WHAT (classic.artifact_layout: docs)
+    │   ├── config.yaml
+    │   ├── specs/<capability>/spec.md # Main specs after archive
+    │   └── changes/
+    │       ├── archive/YYYY-MM-DD-<name>/ # Archived changes
+    │       └── <name>/
+    │           ├── .openspec.yaml       # OpenSpec state
+    │           ├── .comet.yaml          # Comet workflow state (Classic fields + run_id link)
+    │           ├── .comet/
+    │           │   ├── run-state.json   # Engine Run state (machine-owned, auto-migrated)
+    │           │   └── state-events.jsonl # State transition audit log (append-only)
+    │           ├── proposal.md
+    │           ├── design.md
+    │           ├── specs/<capability>/spec.md
+    │           └── tasks.md
+    └── superpowers/                 # Superpowers — HOW
+        ├── specs/                   # Design documents
+        ├── plans/                   # Implementation plans
+        └── reports/                 # Verification reports
 ```
+
+New Classic and dual-workflow projects default to `classic.artifact_layout: docs`. Projects that retain the legacy layout keep the OpenSpec root at repository-level `openspec/`, while Superpowers artifacts remain under `docs/superpowers/`. Use `comet classic root show` to inspect the current layout. To migrate, run `comet classic root move docs --dry-run` first and then apply the returned plan with `--apply`; do not edit the configuration field by itself.
 
 </details>
 
