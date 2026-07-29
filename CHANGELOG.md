@@ -8,14 +8,14 @@ All notable changes to @rpamis/comet will be documented in this file.
 
 - **Targeted platform setup**: `comet init` and `comet update` now accept `--platform <platform>` so you can install or refresh one supported platform, including a project-specific custom platform, without changing the existing automatic fallback.
 - **CodeGraph index lifecycle**: Non-interactive project setup can explicitly choose `comet init --codegraph init|skip`, while JSON output and `comet doctor` report whether the CLI or index is missing, incomplete, stale, or ready. Authorized `comet doctor --repair --yes` runs the matching initialization, rebuild, or sync action without making ordinary doctor checks mutate the project ([#245](https://github.com/rpamis/comet/issues/245)).
-- **Classic catalogue migration**: `comet classic root show` reveals the active Classic artifact root, while `comet classic root move … --dry-run/--apply` plans and performs a safe move to the documentation catalogue ([#173](https://github.com/rpamis/comet/issues/173)).
-- **Native verification handoffs**: Native now provides receipt commands for automated checks, manual observations, implementation attestations, independent review, and approved waivers, so projects that need separated approval roles can record them in the change workflow.
+- **Classic configurable catalogue**: Projects can select `classic.artifact_layout: legacy|docs` for `openspec/` or `docs/openspec/`. `comet classic root show` reveals the active layout, while `comet classic root move … --dry-run/--apply` plans and performs a safe move of existing artifacts and configuration ([#173](https://github.com/rpamis/comet/issues/173)).
+- **Native evidence-backed verification**: Every mandatory acceptance item must be supported by current evidence bound to the active snapshot and scope. Native provides receipt commands for automated checks, manual observations, implementation attestations, independent review, and approved waivers; failed, skipped, blocked, stale, or incomplete evidence cannot produce a passing result, and high-risk changes require independent review ([#240](https://github.com/rpamis/comet/issues/240)).
 
 ### Changed
 
-- **Classic documentation layout**: New Classic and dual-workflow projects store OpenSpec work in `docs/openspec/` beside `docs/comet/` and `docs/superpowers/`. Existing projects stay on their current root-level `openspec/` layout unless you explicitly migrate, and all Classic commands use the selected location.
-- **Native verification and repair**: A Verify pass now requires current evidence for each acceptance item. Failed or incomplete items return the change to Build with the gaps to address, helping the workflow keep repairing before Archive; repeated failures stop for a user decision instead of silently proceeding.
-- **Native archive confirmation**: Set `native.archive_confirmation: required` to require one explicit decision after a successful Archive preview, or keep the existing automatic archive behavior.
+- **Classic documentation layout**: New Classic and dual-workflow projects store OpenSpec work in `docs/openspec/` beside `docs/comet/` and `docs/superpowers/`. Existing projects stay on their current root-level `openspec/` layout unless you explicitly migrate, and all Classic commands use the selected location ([#173](https://github.com/rpamis/comet/issues/173)).
+- **Native Loop**: Failed or incomplete acceptance items return the change to Build as explicit repair input. Only fewer gaps, passing checks, or restored evidence count as progress; implementation churn alone does not reset stagnation or the failure budget. Native continues Build ↔ Verify until the contract is satisfied or a stop condition returns control to the user ([#209](https://github.com/rpamis/comet/issues/209), [#242](https://github.com/rpamis/comet/issues/242)).
+- **Native archive confirmation**: Set `native.archive_confirmation: required` to require one explicit decision after a successful Archive preview, or keep the existing automatic archive behavior. Intermediate repair iterations never request archive confirmation, and choosing not to archive preserves the active change ([#238](https://github.com/rpamis/comet/issues/238)).
 - **Native guidance**: Native Skill instructions now keep the active phase and next action prominent, loading detailed clarification, command, artifact, and recovery guidance only when needed.
 
 ### Fixed
@@ -25,7 +25,7 @@ All notable changes to @rpamis/comet will be documented in this file.
 
 ### Security
 
-- **Native approval isolation**: Signed Native workflows keep approval credentials outside the project and implementation Agent, preventing a project change from granting itself approval authority.
+- **Native approval isolation**: Signed Native workflows keep approval credentials outside the project and implementation Agent, preventing a project change from granting itself approval authority ([#240](https://github.com/rpamis/comet/issues/240)).
 
 ## What's Changed [0.4.0-beta.9] - 2026-07-25
 
