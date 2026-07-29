@@ -104,12 +104,55 @@ describe('Native status diagnostics', () => {
     });
   });
 
+  it('returns policy-aware continuation after a ready Archive preview', () => {
+    const state = {
+      name: 'ready-change',
+      phase: 'archive',
+      revision: 4,
+    } as NativeChangeState;
+    const preflightHash = 'a'.repeat(64);
+
+    expect(
+      nativeContinuation({
+        state,
+        archiveReady: true,
+        archiveConfirmation: 'automatic',
+        archivePreflightHash: preflightHash,
+      }),
+    ).toMatchObject({
+      disposition: 'continue',
+      action: 'archive',
+      command: `comet native archive ready-change --expect-preflight ${preflightHash}`,
+      requiresUserDecision: false,
+      requiredInputs: [],
+    });
+    expect(
+      nativeContinuation({
+        state,
+        archiveReady: true,
+        archiveConfirmation: 'required',
+        archivePreflightHash: preflightHash,
+      }),
+    ).toMatchObject({
+      disposition: 'await-user',
+      action: 'archive',
+      command: null,
+      requiresUserDecision: true,
+      requiredInputs: ['archive-confirmation'],
+    });
+  });
+
   afterEach(async () => {
     await fs.rm(projectRoot, { recursive: true, force: true });
   });
 
   async function validChange(name: string): Promise<void> {
-    const state = await createNativeChange({ paths, name, language: 'en' });
+    const state = await createNativeChange({
+      paths,
+      name,
+      language: 'en',
+      verificationProtocol: 'legacy-v1',
+    });
     await fs.writeFile(path.join(nativeChangeDir(paths, name), state.brief), brief);
   }
 

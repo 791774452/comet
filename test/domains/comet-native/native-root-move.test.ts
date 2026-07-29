@@ -41,9 +41,15 @@ describe('Native artifact root moves', () => {
     const source = await seedNativeRoot(projectRoot, from);
     const config = await readProjectConfig(projectRoot);
     config!.native.clarification_mode = 'batch';
+    config!.native.archive_confirmation = 'required';
     await writeProjectConfig(projectRoot, config!);
     const sourcePaths = await nativeProjectPaths(projectRoot, from);
-    await createNativeChange({ paths: sourcePaths, name: 'identity-change', language: 'en' });
+    await createNativeChange({
+      paths: sourcePaths,
+      name: 'identity-change',
+      language: 'en',
+      verificationProtocol: 'legacy-v1',
+    });
     const sourceSpec = path.join(source, 'specs', 'word-count', 'spec.md');
     const sourceBinary = path.join(source, 'changes', 'active-change', 'payload.bin');
     const expected = [await sha256File(sourceSpec), await sha256File(sourceBinary)];
@@ -68,6 +74,8 @@ describe('Native artifact root moves', () => {
         artifact_root: to,
         language: 'en',
         clarification_mode: 'batch',
+        archive_confirmation: 'required',
+        max_verify_failures: 5,
         snapshot: DEFAULT_NATIVE_SNAPSHOT_CONFIG,
       },
     });
@@ -237,6 +245,8 @@ describe('Native artifact root moves', () => {
         artifact_root: '.',
         language: 'en',
         clarification_mode: 'sequential',
+        archive_confirmation: 'automatic',
+        max_verify_failures: 5,
         snapshot: DEFAULT_NATIVE_SNAPSHOT_CONFIG,
       });
       await expect(fs.access(path.join(projectRoot, 'docs', 'comet'))).rejects.toMatchObject({

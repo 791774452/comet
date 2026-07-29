@@ -26,6 +26,8 @@ describe('Native project configuration', () => {
   it('builds the shared default project config with docs as the Native artifact root', () => {
     expect(defaultProjectConfig().native.artifact_root).toBe('docs');
     expect(defaultProjectConfig().native.clarification_mode).toBe('sequential');
+    expect(defaultProjectConfig().native.archive_confirmation).toBe('automatic');
+    expect(defaultProjectConfig().native.max_verify_failures).toBe(5);
     expect(defaultProjectConfig().native.snapshot).toEqual({
       include: ['**/*'],
       exclude: [],
@@ -47,6 +49,8 @@ describe('Native project configuration', () => {
         artifact_root: 'docs',
         language: 'en',
         clarification_mode: 'sequential',
+        archive_confirmation: 'automatic',
+        max_verify_failures: 5,
         snapshot: {
           include: ['**/*'],
           exclude: [],
@@ -59,13 +63,128 @@ describe('Native project configuration', () => {
     const source = await fs.readFile(path.join(projectRoot, '.comet', 'config.yaml'), 'utf8');
     expect(source).toContain('# Enables automatic recovery');
     expect(source).toContain('# Controls whether Native asks one clarification at a time');
+    expect(source).toContain('# Controls whether Native archives automatically');
+    expect(source).toContain('# Maximum failed Verify outcomes');
     expect(source).toContain('# Selects the project-relative paths included in Native snapshots');
     expect(source).toContain('# Bounds the total file content hashed by one snapshot');
     expect(source).toContain('ambient_resume: true');
     expect(source).toContain('clarification_mode: sequential');
+    expect(source).toContain('archive_confirmation: automatic');
+    expect(source).toContain('max_verify_failures: 5');
     expect(source).toContain('include:');
     expect(source).toContain('- "**/*"');
     expect(source).toContain('max_total_bytes: 268435456');
+  });
+
+  it('does not write Native project config through a linked .comet directory', async () => {
+    const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'comet-native-config-outside-'));
+    try {
+      await fs.rm(path.join(projectRoot, '.comet'), { recursive: true });
+      try {
+        await fs.symlink(
+          outsideRoot,
+          path.join(projectRoot, '.comet'),
+          process.platform === 'win32' ? 'junction' : 'dir',
+        );
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'EPERM') return;
+        throw error;
+      }
+
+      await expect(writeProjectConfig(projectRoot, defaultProjectConfig('docs'))).rejects.toThrow(
+        /symbolic link or junction|real directory/iu,
+      );
+      await expect(fs.access(path.join(outsideRoot, 'config.yaml'))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    } finally {
+      await fs.rm(outsideRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('does not replace a Native project config symlink', async () => {
+    const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'comet-native-link-outside-'));
+    const outsideConfig = path.join(outsideRoot, 'config.yaml');
+    try {
+      await fs.writeFile(outsideConfig, 'keep: true\n', 'utf8');
+      try {
+        await fs.symlink(outsideConfig, path.join(projectRoot, '.comet', 'config.yaml'), 'file');
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'EPERM') return;
+        throw error;
+      }
+
+      await expect(writeProjectConfig(projectRoot, defaultProjectConfig('docs'))).rejects.toThrow(
+        /symbolic link or junction/iu,
+      );
+      await expect(fs.readFile(outsideConfig, 'utf8')).resolves.toBe('keep: true\n');
+    } finally {
+      await fs.rm(outsideRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('does not overwrite a concurrent project config change before commit', async () => {
+    const configPath = path.join(projectRoot, '.comet', 'config.yaml');
+    await writeProjectConfig(projectRoot, defaultProjectConfig('docs'));
+    const concurrentSource = [
+      'schema: comet.project.v1',
+      'default_workflow: native',
+      'workflows: [native]',
+      'ambient_resume: true',
+      'native:',
+      '  artifact_root: concurrent-root',
+      '  language: en',
+      '  clarification_mode: sequential',
+      'concurrent_extension: keep',
+      '',
+    ].join('\n');
+
+    await expect(
+      writeProjectConfig(projectRoot, defaultProjectConfig('updated-root'), {
+        beforeCommit: () => fs.writeFile(configPath, concurrentSource, 'utf8'),
+      }),
+    ).rejects.toThrow('Project config changed before commit');
+    await expect(fs.readFile(configPath, 'utf8')).resolves.toBe(concurrentSource);
+  });
+
+  it('round-trips Classic layout settings in the shared project config', async () => {
+    const value = defaultProjectConfig('docs', 'zh-CN');
+    value.default_workflow = 'classic';
+    value.workflows = ['classic'];
+    value.classic = {
+      artifact_layout: 'docs',
+      language: 'zh-CN',
+      context_compression: 'off',
+      review_mode: 'standard',
+      auto_transition: true,
+    };
+
+    await writeProjectConfig(projectRoot, value);
+
+    await expect(readProjectConfig(projectRoot)).resolves.toEqual(value);
+    await expect(
+      fs.readFile(path.join(projectRoot, '.comet', 'config.yaml'), 'utf8'),
+    ).resolves.toContain('artifact_layout: docs');
+  });
+
+  it('normalizes a missing Classic layout to legacy without changing the schema version', async () => {
+    await fs.writeFile(
+      path.join(projectRoot, '.comet', 'config.yaml'),
+      [
+        'schema: comet.project.v1',
+        'default_workflow: classic',
+        'workflows: [classic]',
+        'native:',
+        '  artifact_root: docs',
+        'classic:',
+        '  language: zh-CN',
+        '',
+      ].join('\n'),
+    );
+
+    const value = await readProjectConfig(projectRoot);
+    expect(value?.classic?.artifact_layout).toBe('legacy');
+    expect(value?.schema).toBe('comet.project.v1');
   });
 
   it('reads an older project config with the missing Native defaults', async () => {
@@ -76,6 +195,8 @@ describe('Native project configuration', () => {
 
     expect((await readProjectConfig(projectRoot))?.native.language).toBe('en');
     expect((await readProjectConfig(projectRoot))?.native.clarification_mode).toBe('sequential');
+    expect((await readProjectConfig(projectRoot))?.native.archive_confirmation).toBe('automatic');
+    expect((await readProjectConfig(projectRoot))?.native.max_verify_failures).toBe(5);
     expect((await readProjectConfig(projectRoot))?.native.snapshot).toEqual(
       defaultProjectConfig().native.snapshot,
     );
@@ -94,6 +215,44 @@ describe('Native project configuration', () => {
     ).resolves.toContain('clarification_mode: batch');
   });
 
+  it('round-trips required Native archive confirmation', async () => {
+    const config = defaultProjectConfig('docs');
+    config.native.archive_confirmation = 'required';
+
+    await writeProjectConfig(projectRoot, config);
+
+    expect((await readProjectConfig(projectRoot))?.native.archive_confirmation).toBe('required');
+    await expect(
+      fs.readFile(path.join(projectRoot, '.comet', 'config.yaml'), 'utf8'),
+    ).resolves.toContain('archive_confirmation: required');
+  });
+
+  it('round-trips a custom Native completion-loop budget', async () => {
+    const config = defaultProjectConfig('docs');
+    config.native.max_verify_failures = 8;
+
+    await writeProjectConfig(projectRoot, config);
+
+    expect((await readProjectConfig(projectRoot))?.native.max_verify_failures).toBe(8);
+    await expect(
+      fs.readFile(path.join(projectRoot, '.comet', 'config.yaml'), 'utf8'),
+    ).resolves.toContain('max_verify_failures: 8');
+  });
+
+  it.each(['0', '-1', '1.5', '"five"'])(
+    'rejects invalid Native completion-loop budget %s',
+    async (value) => {
+      await fs.writeFile(
+        path.join(projectRoot, '.comet', 'config.yaml'),
+        `schema: comet.project.v1\ndefault_workflow: native\nnative:\n  artifact_root: docs\n  max_verify_failures: ${value}\n`,
+      );
+
+      await expect(readProjectConfig(projectRoot)).rejects.toThrow(
+        'native.max_verify_failures must be a positive integer',
+      );
+    },
+  );
+
   it('renders Chinese comments for a Chinese project config', async () => {
     await writeProjectConfig(projectRoot, defaultProjectConfig('docs', 'zh-CN'));
 
@@ -101,6 +260,8 @@ describe('Native project configuration', () => {
     expect(source).toContain('# 是否启用只读的环境感知恢复探针');
     expect(source).toContain('# Native 产物的存放根目录');
     expect(source).toContain('# Native 每轮询问一个问题');
+    expect(source).toContain('# Native 归档预演成功后自动归档');
+    expect(source).toContain('# 同一份已确认 contract 最多允许的 Verify 失败次数');
     expect(source).toContain('# Native 快照纳入的项目相对路径');
     expect(source).toContain('# 单次快照最多哈希的文件内容总字节数');
     expect(source).not.toContain('# Enables automatic recovery');
@@ -186,6 +347,17 @@ describe('Native project configuration', () => {
 
     await expect(readProjectConfig(projectRoot)).rejects.toThrow(
       'native.clarification_mode must be sequential or batch',
+    );
+  });
+
+  it('fails closed for an invalid archive confirmation mode', async () => {
+    await fs.writeFile(
+      path.join(projectRoot, '.comet', 'config.yaml'),
+      'schema: comet.project.v1\ndefault_workflow: native\nnative:\n  artifact_root: docs\n  archive_confirmation: sometimes\n',
+    );
+
+    await expect(readProjectConfig(projectRoot)).rejects.toThrow(
+      'native.archive_confirmation must be automatic or required',
     );
   });
 
@@ -297,6 +469,43 @@ describe('Native project configuration', () => {
     expect(source).toContain('context_compression: beta');
     expect(source).toContain('review_mode: thorough');
     expect(source).toContain('auto_transition: false');
+  });
+
+  it('round-trips unknown top-level and nested workflow extension fields', async () => {
+    await fs.writeFile(
+      path.join(projectRoot, '.comet', 'config.yaml'),
+      [
+        'schema: comet.project.v1',
+        'default_workflow: native',
+        'workflows: [native, classic]',
+        'native:',
+        '  artifact_root: .',
+        '  custom_extension:',
+        '    owner: user',
+        '  snapshot:',
+        '    include: ["**/*"]',
+        '    snapshot_extension: keep',
+        'classic:',
+        '  artifact_layout: legacy',
+        '  classic_extension: keep',
+        'top_extension:',
+        '  enabled: true',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const config = await readProjectConfig(projectRoot);
+    expect(config).not.toBeNull();
+    config!.native.artifact_root = 'docs';
+    await writeProjectConfig(projectRoot, config!);
+
+    const source = await fs.readFile(path.join(projectRoot, '.comet', 'config.yaml'), 'utf8');
+    expect(source).toContain('artifact_root: docs');
+    expect(source).toContain('custom_extension:');
+    expect(source).toContain('snapshot_extension: keep');
+    expect(source).toContain('classic_extension: keep');
+    expect(source).toContain('top_extension:');
   });
 
   it('rejects an oversized project config before parsing it', async () => {

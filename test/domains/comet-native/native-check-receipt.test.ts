@@ -60,6 +60,7 @@ describe('Native scoped check receipts', () => {
     await fs.writeFile(path.join(projectRoot, 'src', 'feature.ts'), 'export const value = 1;\n');
     const created = await createNativeChange({
       paths,
+      verificationProtocol: 'legacy-v1',
       name: 'safe-check',
       language: 'en',
       now: new Date('2026-07-17T00:00:00.000Z'),
@@ -84,6 +85,7 @@ describe('Native scoped check receipts', () => {
     await fs.writeFile(path.join(projectRoot, 'unchanged.ts'), 'export const stable = true;\n');
     const created = await createNativeChange({
       paths,
+      verificationProtocol: 'legacy-v1',
       name: 'safe-check',
       language: 'en',
       now: new Date('2026-07-17T00:00:00.000Z'),
@@ -166,22 +168,23 @@ describe('Native scoped check receipts', () => {
     );
   });
 
-  it('explicitly records binary skips without claiming they were text-scanned', async () => {
+  it('blocks binary skips instead of treating an uninspected scoped file as a pass', async () => {
     const state = await prepareState(Buffer.from([0x00, 0x01, 0x02, 0x03]));
 
     const { receipt } = await executeNativeCheckReceipt({ paths, state });
 
     expect(receipt).toMatchObject({
-      status: 'passed',
+      status: 'failed',
       stale: false,
       counts: {
         filesSelected: 1,
         filesScanned: 0,
         binaryFilesSkipped: 1,
         bytesScanned: 4,
-        issueCount: 0,
-        recordedIssueCount: 0,
+        issueCount: 1,
+        recordedIssueCount: 1,
       },
+      issues: [{ path: 'src/feature.ts', line: 1, kind: 'binary-skipped' }],
     });
   });
 
@@ -223,6 +226,7 @@ describe('Native scoped check receipts', () => {
     await fs.writeFile(path.join(projectRoot, 'src', 'kept.ts'), 'export const kept = true;\n');
     const created = await createNativeChange({
       paths,
+      verificationProtocol: 'legacy-v1',
       name: 'safe-check',
       language: 'en',
       now: new Date('2026-07-17T00:00:00.000Z'),
@@ -318,6 +322,7 @@ describe('Native scoped check receipts', () => {
     }
     const created = await createNativeChange({
       paths,
+      verificationProtocol: 'legacy-v1',
       name: 'safe-check',
       language: 'en',
       now: new Date('2026-07-17T00:00:00.000Z'),
@@ -346,7 +351,13 @@ describe('Native scoped check receipts', () => {
     expect(receipt).toMatchObject({
       status: 'failed',
       counts: { filesSelected: 9, filesScanned: 0, bytesScanned: 0, issueCount: 1 },
-      issues: [{ path: 'src/file-8.txt', line: 1, kind: 'scan-limit' }],
+      issues: [
+        {
+          path: `src/file-${NATIVE_CHECK_LIMITS.maxTotalBytes / NATIVE_CHECK_LIMITS.maxFileBytes}.txt`,
+          line: 1,
+          kind: 'scan-limit',
+        },
+      ],
     });
   });
 
@@ -357,6 +368,7 @@ describe('Native scoped check receipts', () => {
     }
     const created = await createNativeChange({
       paths,
+      verificationProtocol: 'legacy-v1',
       name: 'safe-check',
       language: 'en',
       now: new Date('2026-07-17T00:00:00.000Z'),

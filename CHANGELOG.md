@@ -2,11 +2,30 @@
 
 All notable changes to @rpamis/comet will be documented in this file.
 
-## What's Changed [0.4.0-beta.10] - 2026-07-26
+## What's Changed [0.4.0-beta.10] - 2026-07-28
 
 ### Added
 
-- **Explicit platform targeting**: `comet init` and `comet update` now accept `--platform <platform>` to initialize or refresh one registered platform, or a project-scoped custom platform such as `.test`, while preserving workflow-scoped asset installation and the existing detection fallback when the option is omitted.
+- **Targeted platform setup**: `comet init` and `comet update` now accept `--platform <platform>` so you can install or refresh one supported platform, including a project-specific custom platform, without changing the existing automatic fallback.
+- **CodeGraph index lifecycle**: Non-interactive project setup can explicitly choose `comet init --codegraph init|skip`, while JSON output and `comet doctor` report whether the CLI or index is missing, incomplete, stale, or ready. Authorized `comet doctor --repair --yes` runs the matching initialization, rebuild, or sync action without making ordinary doctor checks mutate the project ([#245](https://github.com/rpamis/comet/issues/245)).
+- **Classic catalogue migration**: `comet classic root show` reveals the active Classic artifact root, while `comet classic root move … --dry-run/--apply` plans and performs a safe move to the documentation catalogue ([#173](https://github.com/rpamis/comet/issues/173)).
+- **Native verification handoffs**: Native now provides receipt commands for automated checks, manual observations, implementation attestations, independent review, and approved waivers, so projects that need separated approval roles can record them in the change workflow.
+
+### Changed
+
+- **Classic documentation layout**: New Classic and dual-workflow projects store OpenSpec work in `docs/openspec/` beside `docs/comet/` and `docs/superpowers/`. Existing projects stay on their current root-level `openspec/` layout unless you explicitly migrate, and all Classic commands use the selected location.
+- **Native verification and repair**: A Verify pass now requires current evidence for each acceptance item. Failed or incomplete items return the change to Build with the gaps to address, helping the workflow keep repairing before Archive; repeated failures stop for a user decision instead of silently proceeding.
+- **Native archive confirmation**: Set `native.archive_confirmation: required` to require one explicit decision after a successful Archive preview, or keep the existing automatic archive behavior.
+- **Native guidance**: Native Skill instructions now keep the active phase and next action prominent, loading detailed clarification, command, artifact, and recovery guidance only when needed.
+
+### Fixed
+
+- **Classic archive references**: Classic archive now updates change-local handoff and related artifact paths to their dated archive location, preserves the recorded handoff hash, and verifies archived references before reporting success, so archived changes pass Guard without manual state edits ([#244](https://github.com/rpamis/comet/issues/244)).
+- **Secondary worktree diagnostics**: `comet doctor` now distinguishes current-worktree project assets, primary-worktree-only assets, and an available global fallback. It reports the effective runtime source without treating intentionally uncopied ignored assets as corruption or executing files from another worktree, while still failing health checks when no usable runtime exists ([#246](https://github.com/rpamis/comet/issues/246)).
+
+### Security
+
+- **Native approval isolation**: Signed Native workflows keep approval credentials outside the project and implementation Agent, preventing a project change from granting itself approval authority.
 
 ## What's Changed [0.4.0-beta.9] - 2026-07-25
 

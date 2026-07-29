@@ -1,7 +1,11 @@
 import path from 'node:path';
 
 import { canonicalHash } from './native-canonical-hash.js';
-import type { NativePhase, NativeSpecOperation } from './native-types.js';
+import type {
+  NativeArchiveConfirmation,
+  NativePhase,
+  NativeSpecOperation,
+} from './native-types.js';
 
 export const NATIVE_ARCHIVE_PREFLIGHT_SCHEMA = 'comet.native.archive-preflight.v1' as const;
 
@@ -35,6 +39,7 @@ export interface NativeArchiveEvidenceFact {
 
 export interface NativeArchivePreflightInput {
   change: string;
+  archiveConfirmation: NativeArchiveConfirmation;
   stateSchema: string;
   revision: number;
   phase: NativePhase;
@@ -54,6 +59,7 @@ export interface NativeArchiveOperationPreview extends NativeArchiveSpecFact {
 export interface NativeArchivePreflight {
   schema: typeof NATIVE_ARCHIVE_PREFLIGHT_SCHEMA;
   change: string;
+  archiveConfirmation: NativeArchiveConfirmation;
   revision: number;
   targetRef: string;
   ready: boolean;
@@ -230,6 +236,9 @@ function derivedFindings(input: {
   if (input.evidence.freshness === 'missing') findings.push('verification-evidence-missing');
   if (input.evidence.freshness === 'invalid') findings.push('verification-evidence-invalid');
   if (input.evidence.freshness === 'stale') findings.push('verification-evidence-stale');
+  if (input.evidence.skippedAcceptanceCount > 0) {
+    findings.push('verification-acceptance-skipped');
+  }
   for (const spec of input.specs) {
     if (spec.actualBaseHash !== spec.expectedBaseHash) findings.push('spec-base-conflict');
   }
@@ -273,9 +282,13 @@ export function buildNativeArchivePreflight(
   ].sort(compareText);
   const revision = positiveRevision(input.revision);
   const targetRef = normalizedRef(input.targetRef, 'Native archive target');
+  if (input.archiveConfirmation !== 'automatic' && input.archiveConfirmation !== 'required') {
+    throw new Error('Native archive confirmation must be automatic or required');
+  }
   const facts = {
     stateSchema: input.stateSchema,
     change: input.change,
+    archiveConfirmation: input.archiveConfirmation,
     revision,
     phase: input.phase,
     archived: input.archived,
@@ -289,6 +302,7 @@ export function buildNativeArchivePreflight(
   return {
     schema: NATIVE_ARCHIVE_PREFLIGHT_SCHEMA,
     change: input.change,
+    archiveConfirmation: input.archiveConfirmation,
     revision,
     targetRef,
     ready: findingCodes.length === 0,

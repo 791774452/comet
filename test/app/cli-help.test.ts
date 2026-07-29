@@ -84,7 +84,19 @@ describe('CLI help text', () => {
       facadeDescriptions.filter((description) => help.stdout.includes(description)),
     ).toHaveLength(4);
     expect(help.stdout).toMatch(/^\s+resume-probe \[options\] \[path\]\s+Probe whether/mu);
+    expect(help.stdout).toMatch(/^\s+classic \[args\.\.\.\]\s+Manage the Comet Classic workflow/mu);
     expect(help.stdout).toContain('Manage the self-contained Comet Native workflow');
+  });
+
+  it('documents the layout-aware Classic command group', () => {
+    const help = runCli('classic', '--help');
+
+    expect(help.status, help.stderr).toBe(0);
+    expect(help.stdout).toContain('Usage: comet classic <command> [args]');
+    expect(help.stdout).toContain('openspec -- <openspec-args...>');
+    expect(help.stdout).toContain('root show');
+    expect(help.stdout).toContain('root move docs --dry-run');
+    expect(help.stdout).toContain('root move docs --apply --plan <id>');
   });
 
   it('keeps Native behind one isolated root command', () => {
@@ -183,5 +195,16 @@ describe('CLI help text', () => {
     expect(commandHelp.stdout).toContain('--no-workflow-work');
     expect(commandHelp.stdout).not.toContain('--no-non-trivial-work');
     expect(commandHelp.stdout).toContain('--already-in-comet-flow');
+  });
+
+  it('exposes explicit CodeGraph initialization and authorized doctor repair controls', () => {
+    const initHelp = runCli('init', '--help');
+    const doctorHelp = runCli('doctor', '--help');
+
+    expect(initHelp.status, initHelp.stderr).toBe(0);
+    expect(doctorHelp.status, doctorHelp.stderr).toBe(0);
+    expect(initHelp.stdout).toContain('--codegraph <action>');
+    expect(doctorHelp.stdout).toContain('--yes');
+    expect(doctorHelp.stdout).toContain('CodeGraph indexing');
   });
 });

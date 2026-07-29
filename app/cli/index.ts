@@ -12,6 +12,7 @@ import { uninstallCommand } from '../commands/uninstall.js';
 import {
   PUBLIC_CLASSIC_COMMANDS,
   runClassicFacade,
+  runClassicGroupFacade,
   type PublicClassicCommand,
 } from '../commands/classic.js';
 import { runNativeFacade } from '../commands/native.js';
@@ -71,6 +72,9 @@ program
   .option('--overwrite', 'Overwrite manifest-managed files')
   .option('--json', 'Output as JSON')
   .option('--platform <platform>', 'Platform target to initialize')
+  .addOption(
+    new Option('--codegraph <action>', 'Project CodeGraph index action').choices(['init', 'skip']),
+  )
   .addOption(new Option('--scope <scope>', 'Install scope').choices(['global', 'project']))
   .addOption(new Option('--language <lang>', 'Language for skills').choices(['en', 'zh']))
   .addOption(
@@ -139,6 +143,13 @@ program
   .description('Diagnose Comet installation health')
   .option('--json', 'Output as JSON')
   .option('--repair', 'Repair managed Hook, Rule, and deterministic selection state')
+  .option('--yes', 'Authorize repairable project integrations such as CodeGraph indexing')
+  .addOption(
+    new Option('--strategy <strategy>', 'Classic root move recovery strategy').choices([
+      'continue',
+      'rollback',
+    ]),
+  )
   .addOption(
     new Option('--scope <scope>', 'Install scope to diagnose').choices([
       'auto',
@@ -225,6 +236,16 @@ for (const command of PUBLIC_CLASSIC_COMMANDS) {
       process.exitCode = await runClassicFacade(command, args);
     });
 }
+
+program
+  .command('classic [args...]')
+  .description('Manage the Comet Classic workflow and its configured artifact root')
+  .allowUnknownOption()
+  .allowExcessArguments()
+  .helpOption(false)
+  .action(async (args: string[]) => {
+    process.exitCode = await runClassicGroupFacade(args);
+  });
 
 program
   .command('native [args...]')

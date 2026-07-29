@@ -1,4 +1,5 @@
 import type {
+  NativeArchiveConfirmation,
   NativeChangeState,
   NativeClarificationMode,
   NativeContinuation,
@@ -29,6 +30,8 @@ export function nativeContinuation(options: {
   evidenceRetreat?: boolean;
   done?: boolean;
   clarificationMode?: NativeClarificationMode;
+  archiveConfirmation?: NativeArchiveConfirmation;
+  archivePreflightHash?: string;
 }): NativeContinuation {
   const findings = options.findings ?? [];
   const actionableFindings = findings.filter(
@@ -39,7 +42,10 @@ export function nativeContinuation(options: {
     (finding) => finding.repairCommand !== null || REPAIR_CODES.test(finding.code),
   );
   const stagnationStop = actionableFindings.find(
-    (finding) => finding.code === 'repair-stagnation-stop',
+    (finding) =>
+      finding.code === 'repair-stagnation-stop' ||
+      finding.code === 'repair-iteration-limit' ||
+      finding.code === 'repair-override-exhausted',
   );
   const requiredInputs = [
     ...new Set(actionableFindings.map((finding) => finding.requiredAction)),
@@ -115,6 +121,20 @@ export function nativeContinuation(options: {
       requiredInputs: ['summary'],
     };
   }
+  if (options.state.phase === 'build' && options.state.verification_result === 'fail') {
+    return {
+      schema: 'comet.native.continuation.v1',
+      skill: 'comet-native',
+      change: options.state.name,
+      phase: options.state.phase,
+      revision: options.state.revision,
+      disposition: 'continue',
+      action: 'work-phase',
+      command: null,
+      requiresUserDecision: false,
+      requiredInputs: ['repair-verification-gaps'],
+    };
+  }
   if (actionableFindings.length > 0) {
     if (options.state.phase === 'archive') {
       return {
@@ -144,6 +164,37 @@ export function nativeContinuation(options: {
     };
   }
   if (options.state.phase === 'archive') {
+    if (options.archiveReady && options.archivePreflightHash) {
+      if (!/^[a-f0-9]{64}$/u.test(options.archivePreflightHash)) {
+        throw new Error('Native Archive continuation preflight must be a SHA-256 hash');
+      }
+      if (options.archiveConfirmation === 'required') {
+        return {
+          schema: 'comet.native.continuation.v1',
+          skill: 'comet-native',
+          change: options.state.name,
+          phase: options.state.phase,
+          revision: options.state.revision,
+          disposition: 'await-user',
+          action: 'archive',
+          command: null,
+          requiresUserDecision: true,
+          requiredInputs: ['archive-confirmation'],
+        };
+      }
+      return {
+        schema: 'comet.native.continuation.v1',
+        skill: 'comet-native',
+        change: options.state.name,
+        phase: options.state.phase,
+        revision: options.state.revision,
+        disposition: 'continue',
+        action: 'archive',
+        command: `comet native archive ${options.state.name} --expect-preflight ${options.archivePreflightHash}`,
+        requiresUserDecision: false,
+        requiredInputs: [],
+      };
+    }
     return {
       schema: 'comet.native.continuation.v1',
       skill: 'comet-native',

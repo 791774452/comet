@@ -471,7 +471,7 @@ function projectRelativeReport(projectRoot: string, report: string): string | nu
   ) {
     return null;
   }
-  return `./${relative}`;
+  return `./${relative.replaceAll(path.sep, '/')}`;
 }
 
 function portableEvalEvidence(
