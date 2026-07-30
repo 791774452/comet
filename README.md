@@ -852,7 +852,7 @@ Track our development progress and upcoming features on the [Comet Roadmap](http
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/chart?repos=rpamis/comet&type=date&legend=top-left&sealed_token=lB84nxf4Emtuo-2F58IUt3ya0FIbY3dTDwnIl9UFA3u_IvEUqaI6dpYXmPItlNJcT00eAFXz5xyZN9TsoBh2la54tkgUbdncTIoFIJco7TO-Vrt-m9SFxw)](https://www.star-history.com/?repos=rpamis%2Fcomet&type=date&legend=top-left)
+[![Star History Chart](https://api.star-history.com/chart?repos=rpamis/comet&type=date&legend=top-left&sealed_token=UMxkYc2GrflG4LawVBIB1HY-k5O2WqatK4llgyINHBnPZRAl9PdOtca_ciCdXoKWpzzOF_K2YLyQ0CQ1Lx1tJjeO53J5mgRo9yK0DanAT_ClPsf4O2XxBQ)](https://www.star-history.com/?repos=rpamis%2Fcomet&type=date&legend=top-left)
 
 ## Contributors
 
