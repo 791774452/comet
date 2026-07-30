@@ -99,7 +99,7 @@ describe('Comet Native Skills', () => {
           '执行一次完整审查',
           '`fail` 回到 Build，从第 1 步继续',
           '`pass` 才进入 Archive',
-          '一次 Agent turn、一次 checkpoint 或 Agent 自述“已完成”都不是终态',
+          '一次 Agent turn、一次 checkpoint、一次 `blocked` 或 Agent 自述“已完成”都不是终态',
           'Agent 负责发现并修复缺口，Runtime 负责判断是否完成',
         ],
       },
@@ -112,7 +112,7 @@ describe('Comet Native Skills', () => {
           'perform one complete review',
           '`fail` returns to Build and repeats from step 1',
           'only `pass` enters Archive',
-          'One Agent turn, one checkpoint, or the Agent saying “complete” is not a terminal state',
+          'One Agent turn, one checkpoint, one `blocked` result, or the Agent saying “complete” is not a terminal state',
           'The Agent finds and repairs gaps; the Runtime decides whether completion has been proven',
         ],
       },
@@ -127,6 +127,50 @@ describe('Comet Native Skills', () => {
       expect(end, variant.language).toBeGreaterThan(start);
       for (const term of variant.terms) {
         expect(loop, `${variant.language}: ${term}`).toContain(term);
+      }
+    }
+  });
+
+  it('treats blocked as recovery and reconfirms changed Build requirements', async () => {
+    const variants = [
+      {
+        language: 'zh' as const,
+        skillTerms: [
+          '`blocked` 会暂停正常 Build → Verify 循环并进入恢复分支',
+          '不因 `blocked` 本身结束任务',
+          '出现新的用户决定时保持在 Build',
+          '执行 Runtime 返回的命令并传入 `--confirmed`',
+        ],
+        commandTerms: [
+          '如果需求变化引入新的用户决定',
+          '保持在 Build 并重新完成澄清与确认',
+          '传入 `--confirmed`',
+        ],
+      },
+      {
+        language: 'en' as const,
+        skillTerms: [
+          '`blocked` pauses the normal Build → Verify loop and enters a recovery branch',
+          'rather than ending the task because it was `blocked`',
+          'If a new user decision appears, stay in Build',
+          'run the command returned by the Runtime and pass `--confirmed`',
+        ],
+        commandTerms: [
+          'If changed requirements introduce a new user decision',
+          'stay in Build and repeat clarification and confirmation',
+          'with `--confirmed`',
+        ],
+      },
+    ];
+
+    for (const variant of variants) {
+      const skill = await read(variant.language, 'SKILL.md');
+      const commands = await read(variant.language, 'reference/commands.md');
+      for (const term of variant.skillTerms) {
+        expect(skill, `${variant.language}: ${term}`).toContain(term);
+      }
+      for (const term of variant.commandTerms) {
+        expect(commands, `${variant.language}: ${term}`).toContain(term);
       }
     }
   });
@@ -209,7 +253,7 @@ describe('Comet Native Skills', () => {
       expect(artifacts).toContain('comet native evidence format');
       expect(artifacts).toContain('"status": "passed"');
       expect(artifacts).toContain('"status": "failed"');
-      expect(artifacts).toContain('"status": "waived"');
+      expect(artifacts).not.toContain('"status": "waived"');
 
       for (const implementationDetail of [
         'native-controller-trust.json',
@@ -236,7 +280,6 @@ describe('Comet Native Skills', () => {
         'new',
         'spec remove',
         'spec rebase',
-        'list',
         'show',
         'status',
         'select',
@@ -245,8 +288,6 @@ describe('Comet Native Skills', () => {
         'evidence format',
         'receipt manual',
         'receipt automated',
-        'receipt implement',
-        'receipt review',
         'next',
         'archive',
         'doctor',
@@ -255,8 +296,17 @@ describe('Comet Native Skills', () => {
       }
       expect(commands).not.toContain('--creation-authorization');
       expect(commands).toContain('--allow-partial-scope <sha256>');
-      expect(commands).toContain('--independent-review-receipt <review-receipt-ref>');
       expect(commands).toContain('--expect-preflight <sha256> [--confirmed]');
+      expect(commands).not.toContain('receipt implement');
+      expect(commands).not.toContain('receipt review');
+      expect(commands).not.toContain('receipt waive');
+      expect(commands).not.toContain('--independent-review-receipt');
+      expect(commands).not.toContain('--waiver');
+      expect(commands).not.toContain('comet native list');
+      expect(commands).not.toContain('--receipt <required-receipt-ref>');
+      expect(commands).not.toContain('--evidence-receipt');
+      expect(commands).not.toContain('--failure-category');
+      expect(commands).not.toContain('--failed-check');
 
       for (const provisioningDetail of [
         'trust keygen',
@@ -273,18 +323,114 @@ describe('Comet Native Skills', () => {
     }
   });
 
-  it('keeps external approval fail-closed without teaching private-key handling', async () => {
+  it('explains project and change commands as a bilingual task-oriented runbook', async () => {
+    const commands = await read('zh', 'reference/commands.md');
+
+    for (const heading of [
+      '### 首次启用 Native',
+      '### 查看或迁移 artifact root',
+      '### 发现并读取 change（只读）',
+      '### 恢复已有 change',
+      '### 创建新 change',
+      '### 修正规格轨迹',
+    ]) {
+      expect(commands).toContain(heading);
+    }
+
+    expect(commands).toContain('不要按本节顺序逐条执行');
+    expect(commands).toContain('`init` 不迁移已有 artifact root');
+    expect(commands).toContain('`root move` 是事务性写操作');
+    expect(commands).toContain('无 change 名称的 `status` 返回分页候选');
+    expect(commands).toContain('`show` 返回 state、brief 和 proposed specs');
+    expect(commands).toContain('`select` 只更新当前 Native selection，不改变 phase');
+    expect(commands).toContain('只有确认没有对应 active change 时才运行 `new`');
+    expect(commands).toContain(
+      '`spec remove` 和 `spec rebase` 都会修改 change 的规格轨迹并返回新的 continuation',
+    );
+    expect(commands).toContain('执行写命令后立即重读 `status <change-name>`');
+
+    const englishCommands = await read('en', 'reference/commands.md');
+    for (const heading of [
+      '### Enable Native for the first time',
+      '### Inspect or migrate the artifact root',
+      '### Discover and read changes (read-only)',
+      '### Resume an existing change',
+      '### Create a new change',
+      '### Correct the specification history',
+    ]) {
+      expect(englishCommands).toContain(heading);
+    }
+
+    expect(englishCommands).toContain('do not execute this section from top to bottom');
+    expect(englishCommands).toContain('`init` does not migrate an existing artifact root');
+    expect(englishCommands).toContain('`root move` is a transactional write operation');
+    expect(englishCommands).toContain(
+      '`status` without a change name returns paginated candidates',
+    );
+    expect(englishCommands).toContain('`show` returns state, the brief, and proposed specs');
+    expect(englishCommands).toContain(
+      '`select` updates only the current Native selection and does not change the phase',
+    );
+    expect(englishCommands).toContain(
+      'Run `new` only after confirming that no matching active change exists',
+    );
+    expect(englishCommands).toContain(
+      "Both `spec remove` and `spec rebase` modify the change's specification history and return a new continuation",
+    );
+    expect(englishCommands).toContain('After any write command, immediately reread');
+  });
+
+  it('removes the external cryptographic review workflow from both languages', async () => {
     const zhSkill = await read('zh', 'SKILL.md');
     const enSkill = await read('en', 'SKILL.md');
     const zhCommands = await read('zh', 'reference/commands.md');
     const enCommands = await read('en', 'reference/commands.md');
 
-    expect(zhSkill).toContain('不要接收签名私钥');
-    expect(zhSkill).toContain('不要代替外部审批角色');
-    expect(enSkill).toContain('Do not receive signing private keys');
-    expect(enSkill).toContain('impersonate an external approval role');
-    expect(zhCommands).toContain('不得执行外部角色的 approve/sign');
-    expect(enCommands).toContain("must not perform an external role's approve or sign action");
+    for (const content of [zhSkill, enSkill, zhCommands, enCommands]) {
+      expect(content).not.toMatch(/waiver|independent.review|attestation|签名私钥|独立审核/iu);
+      expect(content).not.toMatch(/external.role|外部角色/iu);
+    }
+  });
+
+  it('does not ask users for an identity label when recording manual evidence', async () => {
+    for (const language of ['en', 'zh'] as const) {
+      const commands = await read(language, 'reference/commands.md');
+      expect(commands).not.toContain('--responsible');
+      expect(commands).not.toMatch(/receipt manual[\s\S]{0,180}--confirmed/iu);
+      expect(commands).not.toMatch(/\bresponsible\b|观察者标签|身份凭据/iu);
+    }
+  });
+
+  it('makes repair stops actionable without asking users for Runtime internals', async () => {
+    const variants = [
+      {
+        language: 'zh' as const,
+        terms: [
+          '新的修复假设',
+          '提高 `native.max_verify_failures`',
+          '调整已确认契约',
+          '停止本次修复',
+          '不要让用户提供 signature、hash 或 override 参数',
+        ],
+      },
+      {
+        language: 'en' as const,
+        terms: [
+          'one concrete new repair hypothesis',
+          'increase `native.max_verify_failures`',
+          'change the confirmed contract',
+          'stop this repair',
+          'Do not ask the user for a signature, hash, or override argument',
+        ],
+      },
+    ];
+
+    for (const variant of variants) {
+      const skill = await read(variant.language, 'SKILL.md');
+      const recovery = await read(variant.language, 'reference/recovery.md');
+      expect(skill).toContain('`repair-continuation-decision`');
+      for (const term of variant.terms) expect(recovery).toContain(term);
+    }
   });
 
   it('uses recovery as an actionable runbook rather than a Runtime design document', async () => {

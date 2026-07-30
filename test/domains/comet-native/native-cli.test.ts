@@ -17,11 +17,7 @@ import {
 import { NATIVE_CONTRACT_FILE_LIMITS } from '../../../domains/comet-native/native-contract-files.js';
 import { acquireNativeLock, releaseNativeLock } from '../../../domains/comet-native/native-lock.js';
 import { nativeProjectPaths } from '../../../domains/comet-native/native-paths.js';
-import { generateNativeReviewKeyPair } from '../../../domains/comet-native/native-review-identity.js';
-import { buildNativeReviewTrustPolicy } from '../../../domains/comet-native/native-review-trust.js';
-import type { NativeReviewTrustPolicy } from '../../../domains/comet-native/native-review-trust.js';
 import { MAX_NATIVE_IMPLEMENTATION_EVIDENCE_DOCUMENT_BYTES } from '../../../domains/comet-native/native-verification-scope.js';
-import { installNativeControllerTrust } from '../../helpers/native-controller-trust.js';
 
 const brief = `# Outcome
 Add sentence counting.
@@ -55,41 +51,15 @@ function json(result: Awaited<ReturnType<typeof runNativeCli>>): JsonEnvelope {
 
 describe('Comet Native CLI dispatcher', () => {
   let projectRoot: string;
-  let implementationKey: ReturnType<typeof generateNativeReviewKeyPair>;
-  let reviewerKey: ReturnType<typeof generateNativeReviewKeyPair>;
-  let waiverKey: ReturnType<typeof generateNativeReviewKeyPair>;
-  let controllerKey: ReturnType<typeof generateNativeReviewKeyPair>;
-  let reviewPolicy: NativeReviewTrustPolicy;
-  let cleanupControllerTrust: () => Promise<void>;
   const projectArgs = () => ['--project-root', projectRoot] as const;
 
   beforeEach(async () => {
     projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'comet-native-cli-'));
     execFileSync('git', ['init'], { cwd: projectRoot, stdio: 'ignore' });
-    implementationKey = generateNativeReviewKeyPair();
-    reviewerKey = generateNativeReviewKeyPair();
-    waiverKey = generateNativeReviewKeyPair();
-    controllerKey = generateNativeReviewKeyPair();
-    cleanupControllerTrust = await installNativeControllerTrust({
-      projectRoot,
-      controller: controllerKey,
-    });
-    reviewPolicy = buildNativeReviewTrustPolicy({
-      controllerIdentity: controllerKey.identity,
-      controllerPrivateKey: controllerKey.privateKey,
-      implementationKeyId: implementationKey.identity.keyId,
-      trustedReviewers: [reviewerKey.identity],
-      trustedWaiverSigners: [waiverKey.identity],
-    });
-    await fs.mkdir(path.join(projectRoot, '.comet'), { recursive: true });
-    await fs.writeFile(
-      path.join(projectRoot, '.comet', 'native-review-trust.json'),
-      `${JSON.stringify(reviewPolicy, null, 2)}\n`,
-    );
   });
 
   afterEach(async () => {
-    await cleanupControllerTrust();
+    vi.unstubAllEnvs();
     await fs.rm(projectRoot, { recursive: true, force: true });
   });
 
@@ -112,132 +82,6 @@ describe('Comet Native CLI dispatcher', () => {
     ).resolves.toContain('artifact_root: docs');
   });
 
-  it('creates review identities without printing private keys and can add policy after a change', async () => {
-    await fs.rm(path.join(projectRoot, '.comet', 'native-review-trust.json'));
-    expect((await runNativeCli(['init', ...projectArgs()])).exitCode).toBe(0);
-    expect(
-      (await runNativeCli(['new', 'review-policy-after-creation', ...projectArgs()])).exitCode,
-    ).toBe(0);
-    const secretRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'comet-native-secrets-'));
-    try {
-      const identities = await Promise.all(
-        ['implementation', 'reviewer', 'waiver'].map(async (name) => {
-          const identityPath = path.join(projectRoot, 'identities', `${name}.json`);
-          const privateKeyPath = path.join(secretRoot, `${name}.key`);
-          const result = await runNativeCli([
-            'trust',
-            'keygen',
-            '--identity',
-            identityPath,
-            '--private-key',
-            privateKeyPath,
-            '--json',
-            ...projectArgs(),
-          ]);
-          if (process.platform === 'win32') {
-            expect(json(result)).toMatchObject({
-              exitCode: 64,
-              error: {
-                code: 'usage',
-                message: expect.stringContaining('cannot persist private keys on Windows'),
-              },
-            });
-            await expect(fs.access(privateKeyPath)).rejects.toMatchObject({ code: 'ENOENT' });
-            const generated = generateNativeReviewKeyPair();
-            const envName = `COMET_NATIVE_TEST_KEY_${name.toUpperCase()}`;
-            process.env[envName] = generated.privateKey;
-            const imported = await runNativeCli([
-              'trust',
-              'identity',
-              '--identity',
-              identityPath,
-              '--private-key-env',
-              envName,
-              '--json',
-              ...projectArgs(),
-            ]);
-            delete process.env[envName];
-            expect(imported.exitCode, imported.stderr).toBe(0);
-            expect(imported.stdout).not.toContain(generated.privateKey);
-            expect(await fs.readFile(identityPath, 'utf8')).not.toContain(generated.privateKey);
-            return identityPath;
-          }
-          expect(result.exitCode, result.stderr).toBe(0);
-          const privateKey = (await fs.readFile(privateKeyPath, 'utf8')).trim();
-          expect(privateKey).not.toHaveLength(0);
-          expect(result.stdout).not.toContain(privateKey);
-          expect((await fs.stat(privateKeyPath)).mode & 0o077).toBe(0);
-          return identityPath;
-        }),
-      );
-      const controllerEnv = 'COMET_NATIVE_TEST_CONTROLLER_KEY';
-      process.env[controllerEnv] = controllerKey.privateKey;
-      const policy = await runNativeCli([
-        'trust',
-        'policy',
-        '--implementation-identity',
-        identities[0],
-        '--reviewer-identity',
-        identities[1],
-        '--waiver-identity',
-        identities[2],
-        '--controller-private-key-env',
-        controllerEnv,
-        '--json',
-        ...projectArgs(),
-      ]);
-      delete process.env[controllerEnv];
-      expect(policy.exitCode, policy.stderr).toBe(0);
-      expect(
-        JSON.parse(
-          await fs.readFile(path.join(projectRoot, '.comet', 'native-review-trust.json'), 'utf8'),
-        ),
-      ).toMatchObject({
-        schema: 'comet.native.review-trust-policy.v2',
-        policyHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
-      });
-    } finally {
-      await fs.rm(secretRoot, { recursive: true, force: true });
-    }
-  });
-
-  it.runIf(process.platform !== 'win32')(
-    'rejects a private-key target whose outside parent symlink resolves into the project',
-    async () => {
-      const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'comet-native-key-escape-'));
-      const insideTarget = path.join(projectRoot, 'escaped-secrets');
-      const linkedParent = path.join(outsideRoot, 'linked-parent');
-      await fs.mkdir(insideTarget, { recursive: true });
-      await fs.symlink(insideTarget, linkedParent, 'dir');
-      try {
-        const result = json(
-          await runNativeCli([
-            'trust',
-            'keygen',
-            '--identity',
-            path.join(projectRoot, 'implementation-identity.json'),
-            '--private-key',
-            path.join(linkedParent, 'implementation.key'),
-            '--json',
-            ...projectArgs(),
-          ]),
-        );
-        expect(result).toMatchObject({
-          exitCode: 64,
-          error: {
-            code: 'usage',
-            message: expect.stringMatching(/symlink|resolves inside/u),
-          },
-        });
-        await expect(
-          fs.access(path.join(insideTarget, 'implementation.key')),
-        ).rejects.toMatchObject({ code: 'ENOENT' });
-      } finally {
-        await fs.rm(outsideRoot, { recursive: true, force: true });
-      }
-    },
-  );
-
   it('returns structured baseline diagnostics when change creation cannot capture a complete baseline', async () => {
     const config = defaultProjectConfig('.');
     config.native.snapshot.max_total_bytes = 5 * 1024 * 1024;
@@ -259,6 +103,10 @@ describe('Comet Native CLI dispatcher', () => {
         omittedByReason: { 'file-size': 1 },
         samplePaths: ['oversized-baseline.bin'],
         sampleTruncated: false,
+        supportedFixes: [
+          expect.stringContaining('native.snapshot.max_files'),
+          expect.stringContaining('native.snapshot.exclude'),
+        ],
         requiredAction: 'resolve-native-baseline',
       },
       error: { code: 'baseline-incomplete' },
@@ -316,6 +164,18 @@ describe('Comet Native CLI dispatcher', () => {
     });
     execFileSync('git', ['config', 'user.email', 'native@example.test'], { cwd: projectRoot });
     execFileSync('git', ['config', 'user.name', 'Native Test'], { cwd: projectRoot });
+    if (process.platform === 'win32') {
+      await fs.writeFile(
+        path.join(projectRoot, 'receipt-probe.cmd'),
+        [
+          '@echo off',
+          'if not "%COMET_NATIVE_RECEIPT_ENV_TEST%"=="available" exit /b 8',
+          'if not "%~1"=="value & with spaces" exit /b 9',
+          'echo shim-ok',
+        ].join('\r\n'),
+      );
+      execFileSync('git', ['add', 'receipt-probe.cmd'], { cwd: projectRoot });
+    }
     execFileSync('git', ['commit', '--allow-empty', '-m', 'initial'], {
       cwd: projectRoot,
       stdio: 'ignore',
@@ -336,7 +196,7 @@ describe('Comet Native CLI dispatcher', () => {
       '# Sentence counting\nCount sentences by punctuation.\n',
     );
 
-    expect(json(await runNativeCli(['list', '--json', ...projectArgs()])).data).toMatchObject({
+    expect(json(await runNativeCli(['status', '--json', ...projectArgs()])).data).toMatchObject({
       schema: 'comet.native.status-page.v1',
       total: 1,
       items: [expect.objectContaining({ name: 'sentence-counting', phase: 'shape' })],
@@ -414,6 +274,7 @@ describe('Comet Native CLI dispatcher', () => {
     const resumedCriteria = (resumed.data as { acceptancePage: { items: Array<{ id: string }> } })
       .acceptancePage.items;
     expect(resumedCriteria).toEqual(builtCriteria);
+    vi.stubEnv('COMET_NATIVE_RECEIPT_ENV_TEST', 'available');
     const argvProbe = json(
       await runNativeCli([
         'receipt',
@@ -427,22 +288,102 @@ describe('Comet Native CLI dispatcher', () => {
         '--',
         process.execPath,
         '-e',
-        "const expected=['--json','--project-root','child-root']; if(JSON.stringify(process.argv.slice(1))!==JSON.stringify(expected)) process.exit(2); process.stdout.write('argv preserved')",
+        "const expected=['--json','--project-root','child-root']; if(JSON.stringify(process.argv.slice(1))!==JSON.stringify(expected)||process.env.COMET_NATIVE_RECEIPT_ENV_TEST!=='available') process.exit(2); process.stdout.write('argv and environment preserved; to'+'ken=secret-value')",
         '--',
         '--json',
         '--project-root',
         'child-root',
       ]),
     );
-    expect(argvProbe).toMatchObject({
+    expect(argvProbe, JSON.stringify(argvProbe)).toMatchObject({
       exitCode: 0,
       data: {
         receipt: {
           status: 'passed',
           evidence: {
             args: expect.arrayContaining(['--json', '--project-root', 'child-root']),
-            outputSummary: 'argv preserved',
+            outputSummary: 'argv and environment preserved; token=[REDACTED]',
           },
+        },
+      },
+    });
+    if (process.platform === 'win32') {
+      const shimProbe = json(
+        await runNativeCli([
+          'receipt',
+          'automated',
+          'sentence-counting',
+          ...resumedCriteria.flatMap((criterion) => ['--acceptance', criterion.id]),
+          '--json',
+          ...projectArgs(),
+          '--',
+          '.\\receipt-probe',
+          'value & with spaces',
+        ]),
+      );
+      expect(shimProbe, JSON.stringify(shimProbe)).toMatchObject({
+        exitCode: 0,
+        data: {
+          receipt: {
+            status: 'passed',
+            evidence: {
+              args: ['value & with spaces'],
+              outputSummary: 'shim-ok',
+            },
+          },
+        },
+      });
+    }
+    const platformSpy = vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
+    try {
+      const posixProbe = json(
+        await runNativeCli([
+          'receipt',
+          'automated',
+          'sentence-counting',
+          ...resumedCriteria.flatMap((criterion) => ['--acceptance', criterion.id]),
+          '--json',
+          ...projectArgs(),
+          '--',
+          process.execPath,
+          '-e',
+          "process.stdout.write('posix-direct-ok')",
+        ]),
+      );
+      expect(posixProbe, JSON.stringify(posixProbe)).toMatchObject({
+        exitCode: 0,
+        data: {
+          receipt: {
+            status: 'passed',
+            evidence: { outputSummary: 'posix-direct-ok' },
+          },
+        },
+      });
+    } finally {
+      platformSpy.mockRestore();
+    }
+    const timedOutReceipt = json(
+      await runNativeCli([
+        'receipt',
+        'automated',
+        'sentence-counting',
+        ...resumedCriteria.flatMap((criterion) => ['--acceptance', criterion.id]),
+        '--timeout-ms',
+        '1',
+        '--json',
+        ...projectArgs(),
+        '--',
+        process.execPath,
+        '-e',
+        'setInterval(() => {}, 1_000)',
+      ]),
+    );
+    expect(timedOutReceipt, JSON.stringify(timedOutReceipt)).toMatchObject({
+      exitCode: 1,
+      data: {
+        receipt: {
+          status: 'blocked',
+          evidence: { timedOut: true, exitCode: 124, signal: 'SIGKILL' },
         },
       },
     });
@@ -452,18 +393,26 @@ describe('Comet Native CLI dispatcher', () => {
         'manual',
         'sentence-counting',
         ...resumedCriteria.flatMap((criterion) => ['--acceptance', criterion.id]),
-        '--responsible',
-        'native-cli-test',
         '--step',
         'Execute the sentence-counting acceptance contract.',
         '--observation',
         'Every acceptance criterion produced the expected result.',
-        '--confirmed',
         '--json',
         ...projectArgs(),
       ]),
     );
     expect(manualReceiptResult.exitCode).toBe(0);
+    expect(manualReceiptResult.data).toMatchObject({
+      receipt: {
+        schema: 'comet.native.verification-receipt.v3',
+        actor: 'native-runtime:manual-evidence',
+        evidence: {
+          steps: ['Execute the sentence-counting acceptance contract.'],
+          observations: ['Every acceptance criterion produced the expected result.'],
+        },
+      },
+    });
+    expect(JSON.stringify(manualReceiptResult.data)).not.toContain('responsible');
     const manualReceiptRef = (manualReceiptResult.data as { ref: string }).ref;
     const acceptanceEntries = resumedCriteria
       .map((criterion) => ({
@@ -491,168 +440,6 @@ None.
 Pass.
 `,
     );
-    const checked = json(
-      await runNativeCli(['check', 'sentence-counting', '--json', ...projectArgs()]),
-    );
-    const checkedReceiptRef = (checked.data as { ref: string }).ref;
-    expect(checkedReceiptRef).toMatch(/^runtime\/evidence\/receipts\/[a-f0-9]{64}\.json$/u);
-    const identityRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'comet-native-identities-'));
-    const implementationIdentityPath = path.join(identityRoot, 'implementation.json');
-    const reviewerIdentityPath = path.join(identityRoot, 'reviewer.json');
-    const implementationPreparationPath = path.join(
-      identityRoot,
-      'implementation-preparation.json',
-    );
-    const implementationAttestationPath = path.join(
-      identityRoot,
-      'implementation-attestation.json',
-    );
-    const reviewPreparationPath = path.join(identityRoot, 'review-preparation.json');
-    const reviewApprovalPath = path.join(identityRoot, 'review-approval.json');
-    const reviewAttestationPath = path.join(identityRoot, 'review-attestation.json');
-    const implementationKeyEnv = 'COMET_NATIVE_CLI_IMPLEMENTATION_KEY';
-    const reviewerKeyEnv = 'COMET_NATIVE_CLI_REVIEWER_KEY';
-    let reviewReceiptRef = '';
-    try {
-      await fs.writeFile(
-        implementationIdentityPath,
-        `${JSON.stringify(implementationKey.identity, null, 2)}\n`,
-      );
-      await fs.writeFile(
-        reviewerIdentityPath,
-        `${JSON.stringify(reviewerKey.identity, null, 2)}\n`,
-      );
-      process.env[implementationKeyEnv] = implementationKey.privateKey;
-      process.env[reviewerKeyEnv] = reviewerKey.privateKey;
-      const implementationPreparation = json(
-        await runNativeCli([
-          'receipt',
-          'implement',
-          'sentence-counting',
-          'prepare',
-          '--identity',
-          implementationIdentityPath,
-          '--output',
-          implementationPreparationPath,
-          '--json',
-          ...projectArgs(),
-        ]),
-      );
-      expect(implementationPreparation.exitCode).toBe(0);
-      const implementationAttestation = json(
-        await runNativeCli([
-          'receipt',
-          'implement',
-          'sign',
-          '--preparation',
-          implementationPreparationPath,
-          '--identity',
-          implementationIdentityPath,
-          '--private-key-env',
-          implementationKeyEnv,
-          '--output',
-          implementationAttestationPath,
-          '--json',
-        ]),
-      );
-      expect(implementationAttestation.exitCode).toBe(0);
-      const implementationReceipt = json(
-        await runNativeCli([
-          'receipt',
-          'implement',
-          'sentence-counting',
-          'finalize',
-          '--preparation',
-          implementationPreparationPath,
-          '--attestation',
-          implementationAttestationPath,
-          '--confirmed',
-          '--json',
-          ...projectArgs(),
-        ]),
-      );
-      expect(implementationReceipt.exitCode).toBe(0);
-      const implementationReceiptRef = (implementationReceipt.data as { ref: string }).ref;
-      const reviewPreparation = json(
-        await runNativeCli([
-          'receipt',
-          'review',
-          'sentence-counting',
-          'prepare',
-          '--implementation-receipt',
-          implementationReceiptRef,
-          '--report',
-          'verification.md',
-          '--required-receipt',
-          checkedReceiptRef,
-          '--identity',
-          reviewerIdentityPath,
-          '--output',
-          reviewPreparationPath,
-          '--json',
-          ...projectArgs(),
-        ]),
-      );
-      expect(reviewPreparation.exitCode).toBe(0);
-      const reviewApproval = json(
-        await runNativeCli([
-          'receipt',
-          'review',
-          'sentence-counting',
-          'approve',
-          '--preparation',
-          reviewPreparationPath,
-          '--output',
-          reviewApprovalPath,
-          '--attest-manual',
-          manualReceiptRef,
-          '--checked-acceptance-applicability',
-          '--json',
-          ...projectArgs(),
-        ]),
-      );
-      expect(reviewApproval.exitCode).toBe(0);
-      const reviewAttestation = json(
-        await runNativeCli([
-          'receipt',
-          'review',
-          'sign',
-          '--approval',
-          reviewApprovalPath,
-          '--identity',
-          reviewerIdentityPath,
-          '--private-key-env',
-          reviewerKeyEnv,
-          '--output',
-          reviewAttestationPath,
-          '--json',
-        ]),
-      );
-      expect(reviewAttestation.exitCode).toBe(0);
-      const reviewReceipt = json(
-        await runNativeCli([
-          'receipt',
-          'review',
-          'sentence-counting',
-          'finalize',
-          '--preparation',
-          reviewPreparationPath,
-          '--approval',
-          reviewApprovalPath,
-          '--attestation',
-          reviewAttestationPath,
-          '--confirmed',
-          '--json',
-          ...projectArgs(),
-        ]),
-      );
-      expect(reviewReceipt.exitCode).toBe(0);
-      reviewReceiptRef = (reviewReceipt.data as { ref: string }).ref;
-    } finally {
-      delete process.env[implementationKeyEnv];
-      delete process.env[reviewerKeyEnv];
-      await fs.rm(identityRoot, { recursive: true, force: true });
-    }
     const verified = json(
       await runNativeCli([
         'next',
@@ -663,14 +450,6 @@ Pass.
         'pass',
         '--report',
         'verification.md',
-        '--receipt',
-        checkedReceiptRef,
-        '--evidence-receipt',
-        manualReceiptRef,
-        '--evidence-receipt',
-        reviewReceiptRef,
-        '--independent-review-receipt',
-        reviewReceiptRef,
         '--json',
         ...projectArgs(),
       ]),
@@ -900,8 +679,19 @@ Pass.
     const help = await runNativeCli(['--help', ...projectArgs()]);
     expect(help.stdout).toContain('[--confirmed]');
     expect(help.stdout).toContain('spec rebase <change-name> --summary <text>');
+    expect(help.stdout).not.toContain('trust ');
+    expect(help.stdout).not.toContain('receipt implement');
+    expect(help.stdout).not.toContain('receipt review');
+    expect(help.stdout).not.toContain('receipt waive');
+    expect(help.stdout).not.toContain('--waiver');
+    expect(help.stdout).not.toContain('\n  list ');
+    expect(help.stdout).not.toContain('--receipt <');
+    expect(help.stdout).not.toContain('--evidence-receipt');
+    expect(help.stdout).not.toContain('--failure-category');
+    expect(help.stdout).not.toContain('--failed-check');
+    expect(help.stdout).not.toContain('--independent-review-receipt');
 
-    const missing = await runNativeCli(['list', '--json', ...projectArgs()]);
+    const missing = await runNativeCli(['status', '--json', ...projectArgs()]);
     expect(missing.exitCode).toBe(65);
     expect(json(missing)).toMatchObject({ error: { code: 'invalid-data' } });
 

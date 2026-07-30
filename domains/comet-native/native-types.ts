@@ -378,12 +378,6 @@ export interface NativeAdvanceEvidence {
   partialReason?: string;
   verificationResult?: 'pass' | 'fail';
   verificationReport?: string;
-  verificationReceipt?: string;
-  verificationReceiptRefs?: string[];
-  verificationWaiverRefs?: string[];
-  independentReviewReceiptRef?: string;
-  repairFailureCategories?: string[];
-  repairFailedCheckIds?: string[];
   repairOverrideSignature?: string;
   repairOverrideSummary?: string;
 }

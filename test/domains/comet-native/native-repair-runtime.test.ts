@@ -83,8 +83,6 @@ function evidenceInput(
     reportHash: 'c'.repeat(64),
     acceptanceTrace,
     requiredReceiptRefs: [`runtime/evidence/receipts/${'b'.repeat(64)}.json`],
-    independentReviewReceiptRef:
-      result === 'pass' ? `runtime/evidence/receipts/${'c'.repeat(64)}.json` : null,
     now: NOW,
   });
   return { envelope, implementationScope, maxVerifyFailures: 5 };
@@ -129,7 +127,6 @@ function unchangedEvidenceInput(
     reportHash: 'c'.repeat(64),
     acceptanceTrace,
     requiredReceiptRefs: [`runtime/evidence/receipts/${'b'.repeat(64)}.json`],
-    independentReviewReceiptRef: null,
     now: NOW,
   });
   return { envelope, implementationScope, maxVerifyFailures: 5 };
@@ -191,7 +188,6 @@ describe('Native repair runtime integration', () => {
       contractHash: input.envelope.contractHash,
       implementationScopeHash: nativeRepairScopeHash(input.implementationScope),
       artifactSnapshotHash: input.implementationScope.scope.currentProjectionHash,
-      categories: ['verification-failed'],
       failedCheckIds: [],
     });
     expect(signature.signatureHash).toMatch(/^[a-f0-9]{64}$/u);
@@ -634,7 +630,6 @@ describe('Native repair runtime integration', () => {
       nativeRepairFailureFacts({
         envelope: evidence.envelope,
         implementationScope: different.implementationScope,
-        categories: ['verification-failed'],
       }),
     ).toThrow('does not match');
 

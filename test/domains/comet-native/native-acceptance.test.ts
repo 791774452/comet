@@ -456,7 +456,6 @@ Real result.
 describe('Native verification acceptance evidence block', () => {
   const receiptRef = (character: string) =>
     `runtime/evidence/receipts/${character.repeat(64)}.json`;
-  const waiverRef = (character: string) => `runtime/evidence/waivers/${character.repeat(64)}.json`;
   const entries = [
     {
       acceptance_id: `acceptance-${'1'.repeat(64)}`,
@@ -564,7 +563,7 @@ ${NATIVE_ACCEPTANCE_EVIDENCE_END_MARKER}`;
     ).toThrow('unknown field');
   });
 
-  it('requires either evidence refs or a skipped reason, but never both', () => {
+  it('requires passed evidence and lets failed entries use receipts, a reason, or both', () => {
     expect(() =>
       serializeNativeVerificationMachineBlock([
         {
@@ -575,43 +574,39 @@ ${NATIVE_ACCEPTANCE_EVIDENCE_END_MARKER}`;
       ]),
     ).toThrow('passed status requires evidence_refs');
 
-    expect(() =>
+    expect(
       serializeNativeVerificationMachineBlock([
         {
           acceptance_id: `acceptance-${'3'.repeat(64)}`,
           status: 'failed',
           evidence_refs: [receiptRef('f')],
-          skipped_reason: 'Not run.',
+          skipped_reason: 'The automated check failed.',
         },
       ]),
-    ).toThrow('failed status requires a skipped_reason and no evidence');
+    ).toContain(receiptRef('f'));
+
+    expect(() =>
+      serializeNativeVerificationMachineBlock([
+        {
+          acceptance_id: `acceptance-${'3'.repeat(64)}`,
+          status: 'failed',
+          evidence_refs: [],
+        },
+      ]),
+    ).toThrow('failed status requires evidence_refs or a skipped_reason');
   });
 
-  it('accepts only a content-addressed waiver receipt in place of an acceptance check', () => {
-    const block = serializeNativeVerificationMachineBlock([
-      {
-        acceptance_id: `acceptance-${'9'.repeat(64)}`,
-        status: 'waived',
-        evidence_refs: [],
-        waiver_ref: waiverRef('9'),
-      },
-    ]);
-    expect(parseNativeVerificationMachineBlock(block)).toMatchObject([
-      { status: 'waived', waiver_ref: waiverRef('9') },
-    ]);
+  it('rejects removed waived entries and waiver refs', () => {
     expect(() =>
       serializeNativeVerificationMachineBlock([
         {
           acceptance_id: `acceptance-${'9'.repeat(64)}`,
           status: 'waived',
           evidence_refs: [],
-          waiver_ref: 'waiver.json',
+          waiver_ref: `runtime/evidence/waivers/${'9'.repeat(64)}.json`,
         },
       ]),
-    ).toThrow('waiver_ref');
-  });
-
-  it('rejects inline waiver assertions because confirmation must be a content-addressed receipt', () => {
+    ).toThrow('unknown field');
     expect(() =>
       serializeNativeVerificationMachineBlock([
         {
@@ -625,7 +620,7 @@ ${NATIVE_ACCEPTANCE_EVIDENCE_END_MARKER}`;
           },
         },
       ]),
-    ).toThrow('waiver receipt');
+    ).toThrow('unknown field');
   });
 
   it('rejects empty, duplicate, or non-string evidence refs and blank skipped reasons', () => {

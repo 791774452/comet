@@ -90,6 +90,51 @@ describe('skills', () => {
       expect(resolveArtifactLanguage(undefined).id).toBe('en');
     });
 
+    it('does not re-evaluate applicability after the host loads the comet skill', async () => {
+      const zhContent = await fs.readFile(
+        path.join(getAssetsDir(), 'skills-zh', 'comet', 'SKILL.md'),
+        'utf-8',
+      );
+      const enContent = await fs.readFile(
+        path.join(getAssetsDir(), 'skills', 'comet', 'SKILL.md'),
+        'utf-8',
+      );
+
+      expect(zhContent).toContain(
+        '当用户明确调用 /comet，或明确要求使用 Comet 但未指定 Native/Classic 时使用',
+      );
+      expect(zhContent).toContain('一旦宿主加载本 Skill，就视为已经选定 `/comet` 入口');
+      expect(zhContent).toContain('不得重新判断任务是否适合 Comet');
+      expect(zhContent).toContain('必须立即执行下方入口解析');
+      expect(zhContent).toContain('只按返回的 `skill` 选择下列一个入口');
+      expect(zhContent).toContain(
+        '**立即执行：** 使用 Skill 工具加载 `comet-native` 技能。禁止跳过此步骤。',
+      );
+      expect(zhContent).toContain(
+        '**立即执行：** 使用 Skill 工具加载 `comet-classic` 技能。禁止跳过此步骤。',
+      );
+      expect(zhContent).toContain('技能加载后，把用户原始请求完整交给已加载的入口 Skill');
+
+      expect(enContent).toContain(
+        'Use when the user explicitly invokes /comet or asks to use Comet without choosing Native or Classic',
+      );
+      expect(enContent).toContain(
+        'Once the host loads this Skill, treat the `/comet` entry as selected',
+      );
+      expect(enContent).toContain('do not re-evaluate whether the task is suitable for Comet');
+      expect(enContent).toContain('Immediately perform the entry resolution below');
+      expect(enContent).toContain('Select exactly one entry based only on the returned `skill`');
+      expect(enContent).toContain(
+        '**Execute immediately:** Use the Skill tool to load the `comet-native` skill. Do not skip this step.',
+      );
+      expect(enContent).toContain(
+        '**Execute immediately:** Use the Skill tool to load the `comet-classic` skill. Do not skip this step.',
+      );
+      expect(enContent).toContain(
+        "After the skill is loaded, pass the user's original request unchanged to the loaded entry Skill",
+      );
+    });
+
     it('rejects zh and en-US as artifact language values', () => {
       expect(() => resolveArtifactLanguage('zh')).toThrow('Invalid artifact language');
       expect(() => resolveArtifactLanguage('en-US')).toThrow('Invalid artifact language');
@@ -156,8 +201,6 @@ describe('skills', () => {
           'comet native check <change-name>',
           '--result pass|fail',
           '--report verification.md',
-          '--failure-category',
-          '--failed-check',
           '--override-repair',
           'comet native archive <change-name> --dry-run',
           '--expect-preflight',
@@ -190,6 +233,12 @@ describe('skills', () => {
           'Schema 升级',
           '旧 schema',
           '早期 v2',
+          'comet native list',
+          '--evidence-receipt',
+          '--failure-category',
+          '--failed-check',
+          'external-role handoff',
+          '外部角色交接',
         ]) {
           expect(allContent, `${languageDir}: ${unwanted}`).not.toContain(unwanted);
         }
@@ -207,6 +256,65 @@ describe('skills', () => {
       expect(zhMain).toContain('不依赖任何外部 Skill');
       expect(enMain).toContain('make no tool calls after the transition succeeds');
       expect(enMain).toContain('does not depend on any external Skill');
+    });
+
+    it('requires clarification before Native Shape can modify implementation or enter Build', async () => {
+      const zhMain = await fs.readFile(
+        path.join(getAssetsDir(), 'skills-zh', 'comet-native', 'SKILL.md'),
+        'utf-8',
+      );
+      const enMain = await fs.readFile(
+        path.join(getAssetsDir(), 'skills', 'comet-native', 'SKILL.md'),
+        'utf-8',
+      );
+      const zhClarification = await fs.readFile(
+        path.join(getAssetsDir(), 'skills-zh', 'comet-native', 'reference', 'clarification.md'),
+        'utf-8',
+      );
+      const enClarification = await fs.readFile(
+        path.join(getAssetsDir(), 'skills', 'comet-native', 'reference', 'clarification.md'),
+        'utf-8',
+      );
+
+      const zhSectionOffsets = [
+        zhMain.indexOf('## 核心规则'),
+        zhMain.indexOf('## 开始或恢复'),
+        zhMain.indexOf('## 按需加载'),
+        zhMain.indexOf('## Shape'),
+      ];
+      expect(zhSectionOffsets.every((offset) => offset >= 0)).toBe(true);
+      expect(zhSectionOffsets).toEqual([...zhSectionOffsets].sort((left, right) => left - right));
+      expect(zhMain).toContain('确认当前 change 和 phase 后，再按需读取一份对应 reference');
+      expect(zhMain).not.toContain('5. 只读取当前 phase 需要的正式产物');
+      expect(zhMain).toContain('进入 Shape 时，必须先读取并执行[澄清参考]');
+      expect(zhMain).toContain('不得以“需求看起来明确”为由跳过');
+      expect(zhMain).toContain('即使初步判断没有未决行为，也必须完成');
+      expect(zhMain).toContain('完成共享理解确认前，不得修改项目实现或推进到 Build');
+      expect(zhClarification).toContain('进入 Shape 后必须读取本文件');
+      expect(zhClarification).toContain(
+        '完成问题判定、静默假设检查和共享理解确认前，不得修改项目实现或推进到 Build',
+      );
+
+      const enSectionOffsets = [
+        enMain.indexOf('## Core rules'),
+        enMain.indexOf('## Start or resume'),
+        enMain.indexOf('## On-demand loading'),
+        enMain.indexOf('## Shape'),
+      ];
+      expect(enSectionOffsets.every((offset) => offset >= 0)).toBe(true);
+      expect(enSectionOffsets).toEqual([...enSectionOffsets].sort((left, right) => left - right));
+      expect(enMain).toContain('After confirming the current change and phase');
+      expect(enMain).not.toContain('5. Read only the formal artifacts');
+      expect(enMain).toContain('When entering Shape, you must first read and execute');
+      expect(enMain).toContain('Do not skip it because “the requirements look clear.”');
+      expect(enMain).toContain('Even when the initial assessment finds no unresolved behavior');
+      expect(enMain).toContain(
+        'Do not modify project implementation or advance to Build until shared understanding is confirmed',
+      );
+      expect(enClarification).toContain('You must read this file after entering Shape');
+      expect(enClarification).toContain(
+        'Do not modify project implementation or advance to Build until problem classification, the silent-assumption check, and shared-understanding confirmation are complete',
+      );
     });
   });
 
@@ -2649,9 +2757,15 @@ describe('skills', () => {
       }
       expect(zhGuard).toContain('先记录失败并通过 Native Runtime 回到 Build');
       expect(zhGuard).toContain('点号开头的普通项目文件');
+      expect(zhGuard).toContain('零个表示当前没有 Comet 需求');
+      expect(zhGuard).toContain('多个候选时暂停并让用户选择');
+      expect(zhGuard).toContain('普通写入权限不覆盖 brief 中未解决的 `[blocking]`');
       expect(enGuard).toContain('record the failed result');
       expect(enGuard).toContain('return to Build before modifying the implementation');
       expect(enGuard).toContain('dot-prefixed project files');
+      expect(enGuard).toContain('zero means there is no current Comet request');
+      expect(enGuard).toContain('multiple candidates require an explicit user selection');
+      expect(enGuard).toContain('does not override unresolved `[blocking]` user decisions');
 
       await expect(
         fs.access(
