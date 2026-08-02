@@ -86,7 +86,7 @@ const PHYSICAL_SELECTION_STREAM_KEYS = new Set([
   'overflow',
   'unstable',
 ]);
-const ENTRY_KEYS = new Set(['path', 'hash', 'size', 'type']);
+const ENTRY_KEYS = new Set(['path', 'hash', 'size', 'type', 'gitObjectId']);
 const OMISSION_KEYS = new Set(['path', 'size', 'type', 'reason']);
 const OMISSION_OVERFLOW_KEYS = new Set(['ref', 'hash', 'count']);
 const SNAPSHOT_ORIGINS = new Set<NativeContentSnapshotManifest['origin']>([
@@ -131,6 +131,14 @@ interface SnapshotOptions {
    */
   deadlineMs?: number;
   gitProcess?: NativeGitProcessAdapter;
+  /**
+   * When set, the snapshot reuses baseline entry hashes for Git-tracked files whose blob object id
+   * is unchanged since baseline, instead of re-reading and re-hashing them. Only changed, added,
+   * and working-tree-modified files are captured from disk. The resulting manifest is byte-for-byte
+   * equivalent to a full snapshot (same entries ⇒ same projection hash). Ignored for non-Git
+   * projects and when baseline entries lack the recorded gitObjectId.
+   */
+  incrementalBaseline?: NativeContentSnapshotManifest;
 }
 
 interface NativeGitProcessAdapter {
@@ -166,6 +174,7 @@ interface NativeGitSelectionHooks {
   afterCombined?: () => void | Promise<void>;
   afterInitialSelection?: () => void | Promise<void>;
   afterFirstEntryCaptured?: (relative: string) => void | Promise<void>;
+  afterContentRevalidation?: () => void | Promise<void>;
   outputChunkBytes?: number;
 }
 
@@ -180,6 +189,12 @@ interface NativeGitSnapshotSelection {
   untracked: Set<string>;
   gitlinks: Set<string>;
   nestedRepositories: Set<string>;
+  /**
+   * Git blob object id for each tracked file (from `git ls-files --stage`).
+   * Used by the incremental snapshot path to detect unchanged files without
+   * re-reading them. Absent for non-staged and untracked paths.
+   */
+  trackedObjectIds: Map<string, string>;
   omissions: NativeSnapshotOmission[];
   overflow: NativeGitSelectionOverflow | null;
   evidence: NativeGitSelectionEvidence | null;
@@ -809,6 +824,7 @@ async function nativeGitSnapshotSelection(
   const { stagedBefore, combined, stagedAfter } = results;
 
   const tracked = new Set<string>();
+  const trackedObjectIds = new Map<string, string>();
   const gitlinks = new Set<string>();
   const addStagedRecords = (records: readonly Buffer[]): void => {
     for (const encoded of records) {
@@ -829,6 +845,7 @@ async function nativeGitSnapshotSelection(
         throw new Error('Native Git snapshot provider returned an unsafe staged path');
       }
       tracked.add(relative);
+      if (header.stage === '0') trackedObjectIds.set(relative, header.objectId);
       if (header.mode === '160000' && header.stage === '0') gitlinks.add(relative);
     }
   };
@@ -846,6 +863,7 @@ async function nativeGitSnapshotSelection(
   for (const gitlink of gitlinks) nestedRepositories.delete(gitlink);
   return {
     tracked,
+    trackedObjectIds,
     untracked,
     gitlinks,
     nestedRepositories,
@@ -969,6 +987,7 @@ async function nativePhysicalSnapshotSelection(options: {
   physicalProjectRoot: string;
   physicalNativeRoot: string;
   denylist: readonly string[];
+  policy?: ResolvedSnapshotPolicy;
   limits: NativePhysicalSelectionLimits;
   hooks?: NativePhysicalSelectionHooks;
 }): Promise<NativePhysicalSnapshotSelection> {
@@ -1100,6 +1119,7 @@ async function nativePhysicalSnapshotSelection(options: {
         if (!hasExecutionBudget()) break;
         const type = physicalSelectionRecordType(stat);
         if (type === 'directory') {
+          if (snapshotPolicyExcludesDirectory(options.policy, relative)) continue;
           if (!hasExecutionBudget()) break;
           let realDirectory: string;
           try {
@@ -1365,6 +1385,7 @@ interface ResolvedSnapshotPolicy {
   manifest: NativeSnapshotPolicy;
   includeMatchers: SnapshotPatternMatcher[];
   excludeMatchers: SnapshotPatternMatcher[];
+  excludedDirectoryPrefixes: string[];
 }
 
 function epsilonClosure(
@@ -1482,7 +1503,21 @@ function resolveSnapshotPolicy(
     },
     includeMatchers: include.map(compileNativeSnapshotPattern),
     excludeMatchers: exclude.map(compileNativeSnapshotPattern),
+    excludedDirectoryPrefixes: exclude
+      .flatMap((pattern) => {
+        if (!pattern.endsWith('/**')) return [];
+        const prefix = pattern.slice(0, -3);
+        return /[*?]/u.test(prefix) ? [] : [prefix];
+      })
+      .sort((left, right) => left.localeCompare(right, 'en')),
   };
+}
+
+function snapshotPolicyExcludesDirectory(
+  policy: ResolvedSnapshotPolicy | undefined,
+  relative: string,
+): boolean {
+  return policy?.excludedDirectoryPrefixes.includes(relative) ?? false;
 }
 
 function snapshotPolicyIncludes(
@@ -1661,12 +1696,19 @@ function parseEntry(value: unknown, index: number): NativeSnapshotEntry {
     throw new Error(`Native snapshot entry ${index} hash is invalid`);
   }
   if (entry.type !== 'file') throw new Error(`Native snapshot entry ${index} type is invalid`);
-  return {
+  const parsed: NativeSnapshotEntry = {
     path: entryPath,
     hash: entry.hash,
     size: nonNegativeInteger(entry.size, `Native snapshot entry ${index} size`),
     type: 'file',
   };
+  if (entry.gitObjectId !== undefined) {
+    if (typeof entry.gitObjectId !== 'string' || !GIT_OBJECT_ID_PATTERN.test(entry.gitObjectId)) {
+      throw new Error(`Native snapshot entry ${index} gitObjectId is invalid`);
+    }
+    parsed.gitObjectId = entry.gitObjectId;
+  }
+  return parsed;
 }
 
 function parseOmission(value: unknown, index: number): NativeSnapshotOmission {
@@ -2374,6 +2416,7 @@ export async function createNativeContentSnapshot(
     target: string,
     relative: string,
     before: import('fs').Stats,
+    gitObjectId?: string,
   ): Promise<void> => {
     if (!before.isFile() || before.isSymbolicLink()) return;
     if (!nativeSnapshotExecutionHasBudget(execution)) return;
@@ -2462,7 +2505,13 @@ export async function createNativeContentSnapshot(
     }
     if (!nativeSnapshotExecutionHasBudget(execution)) return;
     await recordCapturedEntry(
-      { path: relative, hash: boundedHash.hash, size: after.size, type: 'file' },
+      {
+        path: relative,
+        hash: boundedHash.hash,
+        size: after.size,
+        type: 'file',
+        ...(gitObjectId === undefined ? {} : { gitObjectId }),
+      },
       { kind: 'file', target, realTarget, stat: after },
     );
   };
@@ -2699,6 +2748,7 @@ export async function createNativeContentSnapshot(
       physicalProjectRoot,
       physicalNativeRoot,
       denylist,
+      policy,
       limits: physicalSelectionLimits,
       hooks: options.physicalSelectionHooks,
     });
@@ -2749,6 +2799,7 @@ export async function createNativeContentSnapshot(
       physicalProjectRoot,
       physicalNativeRoot,
       denylist,
+      policy,
       limits: physicalSelectionLimits,
     });
     const finalized = finalizeNativePhysicalSelection(before.evidence, after.evidence);
@@ -2765,6 +2816,47 @@ export async function createNativeContentSnapshot(
     }
   } else {
     await options.gitSelectionHooks?.afterInitialSelection?.();
+    // Incremental path: index only baseline entries that carry a trustworthy
+    // Git object id. Other entries (untracked files, links, legacy manifests,
+    // or files captured from dirty working-tree content) fall back to normal
+    // capture individually instead of disabling reuse for the whole project.
+    const incrementalBaseline = options.incrementalBaseline;
+    const baselineByPath = new Map<string, NativeSnapshotEntry>();
+    let incrementalEnabled = false;
+    if (incrementalBaseline) {
+      const parsedBaseline = parseNativeContentSnapshotManifest(incrementalBaseline);
+      for (const entry of parsedBaseline.entries) {
+        if (entry.gitObjectId !== undefined) baselineByPath.set(entry.path, entry);
+      }
+      incrementalEnabled = baselineByPath.size > 0;
+    }
+    // Detect files modified in the working tree but not yet staged. Git index
+    // object ids do not reflect unstaged edits, so such files must be
+    // re-captured even when their staged object id matches baseline. This
+    // probe also protects newly-created baselines from binding a working-tree
+    // hash to an unrelated index object id.
+    const workingTreeModified = new Set<string>();
+    let gitObjectIdsTrusted = true;
+    try {
+      const modifiedOutput = await runGitBoundedOutput(
+        execution,
+        projectRoot,
+        ['ls-files', '--modified', '-z'],
+        GIT_TEXT_STDOUT_LIMIT,
+      );
+      for (const raw of modifiedOutput.toString('utf8').split('\0')) {
+        const modifiedPath = safeGitProjectPath(raw);
+        if (modifiedPath !== null) workingTreeModified.add(modifiedPath);
+      }
+    } catch {
+      // The snapshot can still be captured safely from disk, but neither
+      // baseline reuse nor new object-id bindings are trustworthy.
+      incrementalEnabled = false;
+      gitObjectIdsTrusted = false;
+      baselineByPath.clear();
+    }
+    const reusedTrackedPaths = new Set<string>();
+    const boundObjectIdPaths = new Set<string>();
     for (const relative of selectionPaths(gitSelection)) {
       if (capturedEntryValidations.has(relative)) continue;
       if (!isSnapshotProjectRef(paths, relative)) continue;
@@ -2877,9 +2969,44 @@ export async function createNativeContentSnapshot(
         }
         continue;
       }
-      await captureFile(target, relative, before);
+      // Incremental reuse: if this tracked file's git blob object id matches
+      // baseline and the working tree is not modified, the content is
+      // provably unchanged — reuse the baseline hash without reading the file.
+      const currentObjectId = gitSelection.trackedObjectIds.get(relative);
+      const baselineEntry = currentObjectId ? baselineByPath.get(relative) : undefined;
+      if (
+        incrementalEnabled &&
+        baselineEntry?.gitObjectId !== undefined &&
+        baselineEntry.gitObjectId === currentObjectId &&
+        !workingTreeModified.has(relative)
+      ) {
+        if (entries.length >= limits.maxFiles) {
+          omit({ path: relative, size: baselineEntry.size, type: 'file', reason: 'file-count' });
+          continue;
+        }
+        if (baselineEntry.size > limits.maxFileBytes) {
+          omit({ path: relative, size: baselineEntry.size, type: 'file', reason: 'file-size' });
+          continue;
+        }
+        if (totalBytes + baselineEntry.size > limits.maxTotalBytes) {
+          omit({ path: relative, size: baselineEntry.size, type: 'file', reason: 'total-size' });
+          continue;
+        }
+        // Reuse the baseline entry verbatim (path, hash, size, gitObjectId).
+        // Do not register a validation: the file is not opened, so there is no
+        // TOCTOU window and revalidateCapturedEntries correctly skips it.
+        entries.push({ ...baselineEntry });
+        totalBytes += baselineEntry.size;
+        reusedTrackedPaths.add(relative);
+        continue;
+      }
+      const boundObjectId =
+        gitObjectIdsTrusted && !workingTreeModified.has(relative) ? currentObjectId : undefined;
+      await captureFile(target, relative, before, boundObjectId);
+      if (boundObjectId !== undefined) boundObjectIdPaths.add(relative);
     }
     await revalidateCapturedEntries();
+    await options.gitSelectionHooks?.afterContentRevalidation?.();
     await finalizeNativeGitSnapshotSelection(
       execution,
       projectRoot,
@@ -2887,6 +3014,38 @@ export async function createNativeContentSnapshot(
       gitSelection,
       options.gitSelectionHooks?.outputChunkBytes,
     );
+    // Reused entries already require a final worktree fence. Newly captured entries only need
+    // the extra fence when they are being added to an incremental baseline: a full snapshot has
+    // never promised an object-id binding for a file captured during this run, and paying for a
+    // second Git traversal on every full capture regresses the normal snapshot path.
+    if (reusedTrackedPaths.size > 0 || (incrementalEnabled && boundObjectIdPaths.size > 0)) {
+      const modifiedAfter = await runGitBoundedOutput(
+        execution,
+        projectRoot,
+        ['ls-files', '--modified', '-z'],
+        GIT_TEXT_STDOUT_LIMIT,
+      );
+      const finalWorkingTreeModified = new Set<string>();
+      for (const raw of modifiedAfter.toString('utf8').split('\0')) {
+        const modifiedPath = safeGitProjectPath(raw);
+        if (modifiedPath !== null) finalWorkingTreeModified.add(modifiedPath);
+      }
+      for (const relative of reusedTrackedPaths) {
+        if (!finalWorkingTreeModified.has(relative)) continue;
+        const entry = entries.find((candidate) => candidate.path === relative);
+        invalidateCapturedEntry(relative, {
+          path: relative,
+          size: entry?.size ?? null,
+          type: 'file',
+          reason: 'changed-during-read',
+        });
+      }
+      for (const relative of boundObjectIdPaths) {
+        if (!finalWorkingTreeModified.has(relative)) continue;
+        const entry = entries.find((candidate) => candidate.path === relative);
+        if (entry) delete entry.gitObjectId;
+      }
+    }
     for (const omission of gitSelection.omissions) omit(omission);
     if (gitSelection.overflow) foldGitSelectionOverflow(gitSelection.overflow);
   }
@@ -2960,6 +3119,7 @@ export async function createNativeCurrentContentSnapshot(
   return createNativeContentSnapshot(paths, {
     ...options,
     policy: baseline.policy,
+    incrementalBaseline: baseline,
     limits: {
       maxFiles: settings.max_files,
       maxFileBytes: settings.max_total_bytes,

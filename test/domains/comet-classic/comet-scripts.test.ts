@@ -151,7 +151,7 @@ async function createFakeOpenSpecArchive(
 }
 
 describe('comet script contracts', () => {
-  it('keeps all Classic command scripts as thin launchers for the shared runtime', async () => {
+  it('keeps all Classic command scripts as self-contained bundles', async () => {
     const sources: Record<string, string> = {
       state: await fs.readFile(path.join(scriptsDir, 'comet-state.mjs'), 'utf-8'),
       validate: await fs.readFile(path.join(scriptsDir, 'comet-yaml-validate.mjs'), 'utf-8'),
@@ -163,12 +163,14 @@ describe('comet script contracts', () => {
       'resume-probe': await fs.readFile(path.join(scriptsDir, 'comet-resume-probe.mjs'), 'utf-8'),
     };
 
+    // The shared runtime remains for the in-process CLI facade; each command
+    // script is now its own esbuild bundle instead of a thin launcher that
+    // forwards to the shared runtime.
     await expect(fs.access(path.join(scriptsDir, 'comet-runtime.mjs'))).resolves.toBeUndefined();
-    for (const [command, source] of Object.entries(sources)) {
-      const cliCommand = command === 'hook-guard' ? 'hook-guard' : command;
+    for (const source of Object.values(sources)) {
       expect(source).toContain('#!/usr/bin/env node');
-      expect(source).toContain("import { main } from './comet-runtime.mjs';");
-      expect(source).toContain(`main([${JSON.stringify(cliCommand)}, ...process.argv.slice(2)])`);
+      // Self-contained: no longer imports the shared runtime.
+      expect(source).not.toContain("from './comet-runtime.mjs'");
       expect(source).not.toMatch(/\b(?:grep|awk|sed)\b/u);
     }
   });
@@ -2932,8 +2934,8 @@ describe('comet scripts', () => {
     expect(guard.status).not.toBe(0);
     expect(guard.stderr).toContain('[FAIL] subagent dispatch confirmed');
     expect(guard.stderr).toContain('subagent_dispatch must be confirmed');
-    expect(guard.stderr).toContain('return to /comet-build Step 2');
-    expect(guard.stderr).not.toContain('ask the user to switch');
+    expect(guard.stderr).toContain('record the selected subagent-driven execution');
+    expect(guard.stderr).not.toContain('real background subagent');
     expect(transition.status).not.toBe(0);
     expect(transition.stderr).toContain('subagent_dispatch must be confirmed');
   }, 20_000);
@@ -4666,7 +4668,7 @@ describe('comet scripts', () => {
       expect(result.stdout).toContain(
         'inspect the first unchecked task against recent git history/diff',
       );
-      expect(result.stdout).toContain('dispatch a real background subagent');
+      expect(result.stdout).toContain('dispatch a subagent');
       expect(result.stdout).toContain(
         'Do not execute the pending task directly in the main window',
       );
@@ -4718,7 +4720,7 @@ describe('comet scripts', () => {
       expect(result.stdout).toContain('Tasks: 2/2 done, 0 pending');
       expect(result.stdout).toContain('Plan tasks: 2/3 done, 1 pending');
       expect(result.stdout).toContain('first unchecked Superpowers plan task');
-      expect(result.stdout).toContain('dispatch a real background subagent');
+      expect(result.stdout).toContain('dispatch a subagent');
     });
 
     it('requires subagent dispatch confirmation when recovering subagent build mode', async () => {
@@ -4753,9 +4755,9 @@ describe('comet scripts', () => {
 
       expect(result.status).toBe(0);
       expect(result.stdout).toContain('subagent_dispatch: PENDING');
-      expect(result.stdout).toContain('Subagent dispatch is not confirmed');
-      expect(result.stdout).toContain('set subagent_dispatch to confirmed');
-      expect(result.stdout).toContain('set build_mode to executing-plans');
+      expect(result.stdout).toContain('Selected subagent execution is not recorded');
+      expect(result.stdout).toContain('comet state set <change-name> subagent_dispatch confirmed');
+      expect(result.stdout).toContain('through subagent execution');
     });
 
     it('keeps subagent dispatch guidance when plan-ready pause is stale', async () => {
@@ -4794,7 +4796,7 @@ describe('comet scripts', () => {
 
       expect(result.status).toBe(0);
       expect(result.stdout).toContain('Plan-ready pause is stale');
-      expect(result.stdout).toContain('dispatch a real background subagent');
+      expect(result.stdout).toContain('dispatch a subagent');
       expect(result.stdout).toContain(
         'Do not execute the pending task directly in the main window',
       );
@@ -5861,21 +5863,29 @@ describe('comet scripts', () => {
       expect(result.stderr).not.toMatch(/[一-龥]/);
     }, 20_000);
 
-    it('allows writes to .claude/ rules regardless of phase', async () => {
-      await createChange(
-        tmpDir,
-        'test-hook',
-        ['workflow: full', 'phase: design', 'context_compression: off', ''].join('\n'),
-      );
+    it.each([
+      ['Claude workspace source', path.join('.claude', 'worktrees', 'change', 'src', 'feature.ts')],
+      ['Codex config', path.join('.codex', 'rules', 'custom.md')],
+    ])(
+      'does not bypass phase protection for %s',
+      async (_label, target) => {
+        await createChange(
+          tmpDir,
+          'test-hook',
+          ['workflow: full', 'phase: design', 'context_compression: off', ''].join('\n'),
+        );
 
-      const claudeDir = path.join(tmpDir, '.claude', 'rules');
-      await fs.mkdir(claudeDir, { recursive: true });
-      const targetFile = path.join(claudeDir, 'custom.md');
+        const targetFile = path.join(tmpDir, target);
+        await fs.mkdir(path.dirname(targetFile), { recursive: true });
 
-      const result = runHookGuard(tmpDir, hookGuardScript, hookStdin(targetFile));
+        const result = runHookGuard(tmpDir, hookGuardScript, hookStdin(targetFile));
 
-      expect(result.status).toBe(0);
-    }, 20_000);
+        expect(result.status).toBe(2);
+        expect(result.stderr).toContain('Current phase: design');
+        expect(result.stderr).toContain('This phase does not allow source writes');
+      },
+      20_000,
+    );
 
     it('ignores archived changes and allows writes', async () => {
       const archiveDir = path.join(tmpDir, 'openspec', 'changes', 'archive');

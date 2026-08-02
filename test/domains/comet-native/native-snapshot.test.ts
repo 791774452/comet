@@ -6,6 +6,7 @@ import path from 'path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { DEFAULT_NATIVE_SNAPSHOT_CONFIG } from '../../../domains/comet-native/native-config.js';
 import {
   createNativeChange,
   nativeChangeDir,
@@ -15,11 +16,16 @@ import { nativeProjectPaths } from '../../../domains/comet-native/native-paths.j
 import {
   compileNativeSnapshotPattern,
   createNativeContentSnapshot,
+  createNativeCurrentContentSnapshot,
   filterNativeContentSnapshotToProjectScope,
   inspectNativeContentSnapshotHealth,
   parseNativeContentSnapshotManifest,
 } from '../../../domains/comet-native/native-snapshot.js';
-import type { NativeProjectPaths } from '../../../domains/comet-native/native-types.js';
+import { buildNativeImplementationScopeBundle } from '../../../domains/comet-native/native-verification-scope.js';
+import type {
+  NativeContentSnapshotManifest,
+  NativeProjectPaths,
+} from '../../../domains/comet-native/native-types.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -105,6 +111,33 @@ describe('Native VCS-independent content snapshots', () => {
     expect(serialized).not.toContain(projectRoot);
     expect(serialized).not.toContain(outsideRoot);
     expect(serialized).not.toContain('TOKEN');
+  });
+
+  it('prunes default platform Skill directories before bounded physical enumeration', async () => {
+    await Promise.all([
+      fs.mkdir(path.join(projectRoot, 'src'), { recursive: true }),
+      fs.mkdir(path.join(projectRoot, '.agents', 'skills', 'comet-native'), { recursive: true }),
+    ]);
+    await fs.writeFile(path.join(projectRoot, 'src', 'app.ts'), 'export const app = true;\n');
+    await Promise.all(
+      Array.from({ length: 32 }, (_, index) =>
+        fs.writeFile(
+          path.join(projectRoot, '.agents', 'skills', 'comet-native', `bundle-${index}.mjs`),
+          'export {};\n',
+        ),
+      ),
+    );
+
+    const manifest = await createNativeContentSnapshot(paths, {
+      policy: DEFAULT_NATIVE_SNAPSHOT_CONFIG,
+      physicalSelectionLimits: { maxNodes: 10 },
+    });
+
+    expect(manifest.complete).toBe(true);
+    expect(manifest.entries).toEqual([
+      expect.objectContaining({ path: 'src/app.ts', type: 'file' }),
+    ]);
+    expect(manifest.capture).toEqual({ provider: 'physical-tree' });
   });
 
   it('fails closed when a discovered worktree .git file cannot be resolved', async () => {
@@ -228,7 +261,12 @@ describe('Native VCS-independent content snapshots', () => {
     const afterStaging = await createNativeContentSnapshot(paths, options);
 
     expect(beforeStaging.complete).toBe(true);
-    expect(afterStaging).toEqual(beforeStaging);
+    // Staging adds a gitObjectId to the entry (the file becomes tracked), but
+    // the content hash and size must be identical — only the git metadata changes.
+    expect(afterStaging.entries).toHaveLength(beforeStaging.entries.length);
+    expect(afterStaging.entries[0]!.path).toBe(beforeStaging.entries[0]!.path);
+    expect(afterStaging.entries[0]!.hash).toBe(beforeStaging.entries[0]!.hash);
+    expect(afterStaging.entries[0]!.size).toBe(beforeStaging.entries[0]!.size);
     expect(afterStaging.capture).toEqual({ provider: 'git' });
   });
 
@@ -1645,5 +1683,255 @@ describe('Native VCS-independent content snapshots', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+describe('Native incremental content snapshots', () => {
+  let projectRoot: string;
+  let paths: NativeProjectPaths;
+
+  beforeEach(async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'comet-native-incremental-'));
+    paths = await nativeProjectPaths(projectRoot, '.');
+    await fs.mkdir(paths.nativeRoot, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true, maxRetries: 5 });
+  });
+
+  async function initGitRepo(): Promise<void> {
+    await execFileAsync('git', ['init'], { cwd: projectRoot });
+    await execFileAsync('git', ['config', 'user.email', 'test@example.com'], { cwd: projectRoot });
+    await execFileAsync('git', ['config', 'user.name', 'Test'], { cwd: projectRoot });
+  }
+
+  /**
+   * Compute the projection hash from a manifest — the value that receipts
+   * bind to. Incremental and full snapshots must produce the same hash when
+   * the file tree is unchanged.
+   */
+  function projectionHashOf(
+    manifest: Parameters<typeof buildNativeImplementationScopeBundle>[0]['current'],
+  ): string {
+    const bundle = buildNativeImplementationScopeBundle({
+      baseline: manifest,
+      current: manifest,
+      contractHash: '0'.repeat(64),
+      declaredArtifacts: [],
+      noCodeReason: null,
+    });
+    return bundle.scope.currentProjectionHash;
+  }
+
+  /**
+   * Produce a full (non-incremental) snapshot using the same config-derived
+   * limits as `createNativeCurrentContentSnapshot`, so the only difference
+   * from the incremental call is the reuse of baseline hashes. Both calls
+   * pass a baseline manifest for policy, but only `incremental` passes one
+   * whose entries carry gitObjectId (enabling the incremental path).
+   */
+  async function fullCurrentSnapshot(
+    baseline: Awaited<ReturnType<typeof createNativeContentSnapshot>>,
+  ): Promise<NativeContentSnapshotManifest> {
+    // Strip gitObjectId so the incremental path stays disabled (full capture).
+    const legacyPolicyBaseline = parseNativeContentSnapshotManifest({
+      ...baseline,
+      entries: baseline.entries.map((entry) => {
+        const { gitObjectId: _removed, ...rest } = entry;
+        return rest;
+      }),
+    });
+    return createNativeCurrentContentSnapshot(paths, legacyPolicyBaseline);
+  }
+
+  it('produces an identical projection hash when no files changed since baseline', async () => {
+    await initGitRepo();
+    await fs.writeFile(path.join(projectRoot, 'a.ts'), 'export const a = 1;\n');
+    await fs.writeFile(path.join(projectRoot, 'b.ts'), 'export const b = 2;\n');
+    await execFileAsync('git', ['add', '-A'], { cwd: projectRoot });
+    await execFileAsync('git', ['commit', '-m', 'init'], { cwd: projectRoot });
+
+    const baseline = await createNativeContentSnapshot(paths);
+    expect(baseline.entries.every((e) => e.gitObjectId !== undefined)).toBe(true);
+
+    const full = await fullCurrentSnapshot(baseline);
+    const incremental = await createNativeCurrentContentSnapshot(paths, baseline);
+
+    expect(projectionHashOf(incremental)).toBe(projectionHashOf(full));
+    expect(incremental.entries).toHaveLength(full.entries.length);
+  });
+
+  it('re-captures a working-tree-modified file instead of reusing the stale hash', async () => {
+    await initGitRepo();
+    await fs.writeFile(path.join(projectRoot, 'a.ts'), 'export const a = 1;\n');
+    await execFileAsync('git', ['add', '-A'], { cwd: projectRoot });
+    await execFileAsync('git', ['commit', '-m', 'init'], { cwd: projectRoot });
+
+    const baseline = await createNativeContentSnapshot(paths);
+
+    // Modify the file in the working tree WITHOUT staging — git index object
+    // id is unchanged, but content differs. The incremental path must detect
+    // this via `git ls-files --modified` and re-hash from disk.
+    await fs.writeFile(path.join(projectRoot, 'a.ts'), 'export const a = 999;\n');
+
+    const full = await fullCurrentSnapshot(baseline);
+    const incremental = await createNativeCurrentContentSnapshot(paths, baseline);
+
+    // Both must reflect the actual disk content, not the stale baseline hash.
+    expect(projectionHashOf(incremental)).toBe(projectionHashOf(full));
+    expect(incremental.entries[0]!.hash).toBe(full.entries[0]!.hash);
+    expect(incremental.entries[0]!.hash).not.toBe(baseline.entries[0]!.hash);
+  });
+
+  it('captures newly added files that were not in baseline', async () => {
+    await initGitRepo();
+    await fs.writeFile(path.join(projectRoot, 'a.ts'), 'export const a = 1;\n');
+    await execFileAsync('git', ['add', '-A'], { cwd: projectRoot });
+    await execFileAsync('git', ['commit', '-m', 'init'], { cwd: projectRoot });
+
+    const baseline = await createNativeContentSnapshot(paths);
+
+    // Add a new tracked file.
+    await fs.writeFile(path.join(projectRoot, 'b.ts'), 'export const b = 2;\n');
+    await execFileAsync('git', ['add', '-A'], { cwd: projectRoot });
+    await execFileAsync('git', ['commit', '-m', 'add b'], { cwd: projectRoot });
+
+    const full = await fullCurrentSnapshot(baseline);
+    const incremental = await createNativeCurrentContentSnapshot(paths, baseline);
+
+    expect(projectionHashOf(incremental)).toBe(projectionHashOf(full));
+    expect(incremental.entries.map((e) => e.path).sort()).toEqual(['a.ts', 'b.ts']);
+  });
+
+  it('falls back to full capture when baseline entries lack gitObjectId', async () => {
+    await initGitRepo();
+    await fs.writeFile(path.join(projectRoot, 'a.ts'), 'export const a = 1;\n');
+    await execFileAsync('git', ['add', '-A'], { cwd: projectRoot });
+    await execFileAsync('git', ['commit', '-m', 'init'], { cwd: projectRoot });
+
+    const realBaseline = await createNativeContentSnapshot(paths);
+    // Simulate a legacy manifest by stripping gitObjectId from every entry.
+    const legacyBaseline = parseNativeContentSnapshotManifest({
+      ...realBaseline,
+      entries: realBaseline.entries.map((entry) => {
+        const { gitObjectId: _removed, ...rest } = entry;
+        return rest;
+      }),
+    });
+    expect(legacyBaseline.entries.every((e) => e.gitObjectId === undefined)).toBe(true);
+
+    const full = await fullCurrentSnapshot(realBaseline);
+    // Passing a legacy baseline must not break — it degrades to full capture.
+    const result = await createNativeCurrentContentSnapshot(paths, legacyBaseline);
+    expect(projectionHashOf(result)).toBe(projectionHashOf(full));
+  });
+
+  it('does not bind a working-tree hash to the index object id', async () => {
+    await initGitRepo();
+    await fs.writeFile(path.join(projectRoot, 'a.ts'), 'base\n');
+    await execFileAsync('git', ['add', '-A'], { cwd: projectRoot });
+    await execFileAsync('git', ['commit', '-m', 'init'], { cwd: projectRoot });
+
+    await fs.writeFile(path.join(projectRoot, 'a.ts'), 'modified\n');
+    const dirtyBaseline = await createNativeContentSnapshot(paths);
+    expect(dirtyBaseline.entries[0]!.gitObjectId).toBeUndefined();
+
+    await execFileAsync('git', ['restore', 'a.ts'], { cwd: projectRoot });
+    const incremental = await createNativeContentSnapshot(paths, {
+      policy: dirtyBaseline.policy,
+      incrementalBaseline: dirtyBaseline,
+    });
+    const full = await createNativeContentSnapshot(paths, { policy: dirtyBaseline.policy });
+
+    expect(incremental.entries).toEqual(full.entries);
+    expect(projectionHashOf(incremental)).toBe(projectionHashOf(full));
+  });
+
+  it('reuses eligible tracked entries when another baseline entry has no gitObjectId', async () => {
+    await initGitRepo();
+    await fs.writeFile(path.join(projectRoot, 'a.ts'), 'tracked\n');
+    await execFileAsync('git', ['add', '-A'], { cwd: projectRoot });
+    await execFileAsync('git', ['commit', '-m', 'init'], { cwd: projectRoot });
+    await fs.writeFile(path.join(projectRoot, 'z-untracked.txt'), 'untracked\n');
+
+    const baseline = await createNativeContentSnapshot(paths);
+    expect(baseline.entries.find((entry) => entry.path === 'a.ts')?.gitObjectId).toBeDefined();
+    expect(
+      baseline.entries.find((entry) => entry.path === 'z-untracked.txt')?.gitObjectId,
+    ).toBeUndefined();
+
+    const captured: string[] = [];
+    const incremental = await createNativeContentSnapshot(paths, {
+      policy: baseline.policy,
+      incrementalBaseline: baseline,
+      gitSelectionHooks: {
+        afterFirstEntryCaptured: (relative) => {
+          captured.push(relative);
+        },
+      },
+    });
+
+    expect(captured).toEqual(['z-untracked.txt']);
+    expect(projectionHashOf(incremental)).toBe(projectionHashOf(baseline));
+  });
+
+  it('invalidates a reused entry modified after the initial worktree fence', async () => {
+    await initGitRepo();
+    await fs.writeFile(path.join(projectRoot, 'a.ts'), 'a0\n');
+    await fs.writeFile(path.join(projectRoot, 'b.ts'), 'b0\n');
+    await execFileAsync('git', ['add', '-A'], { cwd: projectRoot });
+    await execFileAsync('git', ['commit', '-m', 'init'], { cwd: projectRoot });
+
+    const baseline = await createNativeContentSnapshot(paths);
+    await fs.writeFile(path.join(projectRoot, 'a.ts'), 'a1\n');
+    let changed = false;
+    const incremental = await createNativeContentSnapshot(paths, {
+      policy: baseline.policy,
+      incrementalBaseline: baseline,
+      gitSelectionHooks: {
+        afterFirstEntryCaptured: async (relative) => {
+          if (relative === 'a.ts') {
+            changed = true;
+            await fs.writeFile(path.join(projectRoot, 'b.ts'), 'b1\n');
+          }
+        },
+      },
+    });
+
+    expect(changed).toBe(true);
+    expect(incremental.entries.some((entry) => entry.path === 'b.ts')).toBe(false);
+    expect(incremental.omitted).toContainEqual({
+      path: 'b.ts',
+      size: 3,
+      type: 'file',
+      reason: 'changed-during-read',
+    });
+    expect(incremental.complete).toBe(false);
+  });
+
+  it('drops a newly bound Git object id when the file becomes modified after capture', async () => {
+    await initGitRepo();
+    await fs.writeFile(path.join(projectRoot, 'a.ts'), 'base\n');
+    await execFileAsync('git', ['add', '-A'], { cwd: projectRoot });
+    await execFileAsync('git', ['commit', '-m', 'init'], { cwd: projectRoot });
+
+    const baseline = await createNativeContentSnapshot(paths);
+    await fs.writeFile(path.join(projectRoot, 'a.ts'), 'staged\n');
+    await execFileAsync('git', ['add', 'a.ts'], { cwd: projectRoot });
+
+    const incremental = await createNativeContentSnapshot(paths, {
+      policy: baseline.policy,
+      incrementalBaseline: baseline,
+      gitSelectionHooks: {
+        afterContentRevalidation: async () => {
+          await fs.writeFile(path.join(projectRoot, 'a.ts'), 'modified after capture\n');
+        },
+      },
+    });
+
+    const entry = incremental.entries.find((candidate) => candidate.path === 'a.ts');
+    expect(entry).toEqual(expect.objectContaining({ path: 'a.ts', hash: sha256Text('staged\n') }));
+    expect(entry).not.toHaveProperty('gitObjectId');
   });
 });

@@ -392,6 +392,43 @@ describe('comet init E2E', () => {
     expect(mockedExecFileSync.mock.calls.some((call) => String(call[0]) === 'openspec')).toBe(true);
   });
 
+  it('upgrades an incompatible OpenSpec CLI before non-interactive Classic setup', async () => {
+    mockExternalSuccess();
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+    const externalSuccess = mockedExecFileSync.getMockImplementation();
+    let openSpecVersion = '1.3.1';
+    mockedExecFileSync.mockImplementation((command, args, options) => {
+      const cmd = String(command);
+      const cmdArgs = Array.isArray(args) ? args.map(String) : [];
+      if (cmd === 'openspec' && cmdArgs[0] === '--version') {
+        return Buffer.from(openSpecVersion);
+      }
+      if (
+        (cmd === 'npm' || cmd === 'npm.cmd') &&
+        cmdArgs.join(' ') === 'install -g @fission-ai/openspec@latest'
+      ) {
+        openSpecVersion = '1.5.0';
+        return Buffer.from('upgraded');
+      }
+      return externalSuccess?.(command, args, options) ?? Buffer.from('');
+    });
+
+    const { initCommand } = await import('../../app/commands/init.js');
+    const result = await captureJsonOutput(() =>
+      initCommand(tmpDir, { yes: true, json: true, workflow: 'classic', language: 'en' }),
+    );
+
+    expect(result).toMatchObject({ status: 'complete' });
+    expect(
+      mockedExecFileSync.mock.calls.some(
+        ([command, args]) =>
+          (String(command) === 'npm' || String(command) === 'npm.cmd') &&
+          Array.isArray(args) &&
+          args.map(String).join(' ') === 'install -g @fission-ai/openspec@latest',
+      ),
+    ).toBe(true);
+  });
+
   it('supports an explicit Native artifact root through the main init command', async () => {
     mockExternalSuccess();
     await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
@@ -485,6 +522,37 @@ describe('comet init E2E', () => {
     expect(config.classic?.artifact_layout).toBe('docs');
     await expect(fs.stat(path.join(tmpDir, 'docs', 'openspec'))).resolves.toBeDefined();
     await expect(fs.access(path.join(tmpDir, 'openspec'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  it('adopts a legacy Classic root when the project configuration is missing', async () => {
+    mockExternalSuccess();
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+    await fs.mkdir(path.join(tmpDir, 'openspec', 'changes', 'archive'), { recursive: true });
+    const { initCommand } = await import('../../app/commands/init.js');
+
+    const result = await captureJsonOutput(() =>
+      initCommand(tmpDir, {
+        yes: true,
+        json: true,
+        workflow: 'classic',
+        language: 'en',
+        overwrite: true,
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: 'complete',
+      classicArtifactLayout: 'legacy',
+      projectConfigCreated: true,
+    });
+    const config = parse(await fs.readFile(path.join(tmpDir, '.comet', 'config.yaml'), 'utf8')) as {
+      classic?: { artifact_layout?: string };
+    };
+    expect(config.classic?.artifact_layout).toBe('legacy');
+    await expect(fs.stat(path.join(tmpDir, 'openspec', 'config.yaml'))).resolves.toBeDefined();
+    await expect(fs.access(path.join(tmpDir, 'docs', 'openspec'))).rejects.toMatchObject({
       code: 'ENOENT',
     });
   });
@@ -1776,7 +1844,7 @@ describe('comet init E2E', () => {
   );
 
   it(
-    'repeated init fails closed without invoking OpenSpec or mutating either artifact root when both roots exist',
+    'repeated init preserves both artifact roots and uses the configured Classic layout when both roots exist',
     async () => {
       mockExternalSuccess();
       await fs.mkdir(path.join(tmpDir, '.codex'), { recursive: true });
@@ -1792,8 +1860,6 @@ describe('comet init E2E', () => {
         'docs\n',
         'utf8',
       );
-      const configBefore = await fs.readFile(path.join(tmpDir, '.comet', 'config.yaml'), 'utf8');
-
       mockedExecFileSync.mockClear();
       mockExternalSuccess();
       const result = await captureJsonOutput(() =>
@@ -1801,28 +1867,26 @@ describe('comet init E2E', () => {
       );
 
       expect(result).toMatchObject({
-        status: 'incomplete',
-        failures: expect.arrayContaining([
-          expect.objectContaining({
-            component: 'OpenSpec',
-            reason: expect.stringContaining('Classic layout conflict'),
-          }),
-        ]),
+        status: 'complete',
+        classicArtifactLayout: 'docs',
       });
       expect(
         mockedExecFileSync.mock.calls.some(
           ([command, args]) => command === 'openspec' && Array.isArray(args) && args[0] === 'init',
         ),
-      ).toBe(false);
+      ).toBe(true);
       await expect(
         fs.readFile(path.join(tmpDir, 'openspec', 'legacy-marker.txt'), 'utf8'),
       ).resolves.toBe('legacy\n');
       await expect(
         fs.readFile(path.join(tmpDir, 'docs', 'openspec', 'docs-marker.txt'), 'utf8'),
       ).resolves.toBe('docs\n');
-      await expect(fs.readFile(path.join(tmpDir, '.comet', 'config.yaml'), 'utf8')).resolves.toBe(
-        configBefore,
-      );
+      const config = parse(
+        await fs.readFile(path.join(tmpDir, '.comet', 'config.yaml'), 'utf8'),
+      ) as {
+        classic?: { artifact_layout?: string };
+      };
+      expect(config.classic?.artifact_layout).toBe('docs');
     },
     INIT_E2E_TIMEOUT_MS,
   );

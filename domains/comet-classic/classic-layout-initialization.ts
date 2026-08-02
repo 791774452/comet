@@ -4,6 +4,7 @@ import type { BigIntStats } from 'fs';
 import path from 'path';
 
 import { atomicWriteContainedJson } from '../workflow-contract/contained-atomic-write.js';
+import { hasExplicitClassicArtifactLayout } from '../workflow-contract/project-config.js';
 import {
   readWorkflowProjectConfigIdentity,
   readWorkflowProjectConfigSnapshot,
@@ -1086,7 +1087,9 @@ export async function assertClassicLayoutInitializationSafe(
       configIdentity,
       ownership.configIdentity,
     );
-    const configuredLayout = config?.classic?.artifact_layout ?? desiredLayout;
+    const configuredLayout = hasExplicitClassicArtifactLayout(config?.value.classic)
+      ? (config?.classic?.artifact_layout ?? desiredLayout)
+      : desiredLayout;
     const committedConfigurationMatches =
       Boolean(config && classicEnabled && configuredLayout === desiredLayout) &&
       ownership.rootIdentity !== null &&
@@ -1111,7 +1114,9 @@ export async function assertClassicLayoutInitializationSafe(
   }
 
   if (config && classicEnabled) {
-    const configuredLayout = config.classic?.artifact_layout ?? desiredLayout;
+    const configuredLayout = hasExplicitClassicArtifactLayout(config.value.classic)
+      ? (config.classic?.artifact_layout ?? desiredLayout)
+      : desiredLayout;
     if (configuredLayout !== desiredLayout) {
       throw new Error(
         `Configured Classic layout is ${configuredLayout}, but OpenSpec initialization requested ${desiredLayout}`,
@@ -1126,7 +1131,7 @@ export async function assertClassicLayoutInitializationSafe(
       };
     }
     if (!config.config) {
-      if (desiredRoot.exists && !alternateRoot.exists) {
+      if (desiredRoot.exists) {
         return {
           ...desired,
           initializationPermit: permitsDesiredRoot(permit, root, desiredLayout)
@@ -1134,16 +1139,13 @@ export async function assertClassicLayoutInitializationSafe(
             : initializationPermit(root, desiredLayout, configIdentity),
         };
       }
-      if (desiredRoot.exists && alternateRoot.exists) {
-        throw new Error(
-          'Classic layout conflict: both openspec/ and docs/openspec/ exist; resolve the conflict before writing',
-        );
-      }
       throw new Error(
         `Configured Classic OpenSpec root is missing for ${desiredLayout} layout while the alternate root exists`,
       );
     }
-    const configured = await assertClassicLayoutWritable(root);
+    const configured = await assertClassicLayoutWritable(root, desiredLayout, {
+      allowAlternateRoot: true,
+    });
     return {
       ...configured,
       initializationPermit: permitsDesiredRoot(permit, root, desiredLayout)
@@ -1153,12 +1155,13 @@ export async function assertClassicLayoutInitializationSafe(
   }
 
   if (legacyRoot.exists || docsRoot.exists) {
-    if (
-      permitsDesiredRoot(permit, root, desiredLayout) &&
-      desiredRoot.exists &&
-      !alternateRoot.exists
-    ) {
-      return { ...desired, initializationPermit: permit };
+    if (desiredRoot.exists && !alternateRoot.exists) {
+      return {
+        ...desired,
+        initializationPermit: permitsDesiredRoot(permit, root, desiredLayout)
+          ? permit
+          : initializationPermit(root, desiredLayout, configIdentity),
+      };
     }
     throw new Error(
       'Cannot initialize Classic layout without .comet/config.yaml when openspec/ or docs/openspec/ already exists',

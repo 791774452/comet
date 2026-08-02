@@ -67,6 +67,13 @@ interface AdvanceNativeChangeOptions {
   hooks?: NativeTransitionHooks;
 }
 
+export function formatNativeReceiptBindingMismatchMessage(options: {
+  change: string;
+  detail: string;
+}): string {
+  return `Native verification receipt binding is invalid: ${options.detail}. Re-issue the affected receipts with \`comet native receipt refresh ${options.change} --apply\`.`;
+}
+
 function hasEvidenceRetreatExtras(evidence: NativeAdvanceEvidence): boolean {
   return (
     evidence.confirmed !== undefined ||
@@ -601,10 +608,33 @@ async function advanceNativeChangeLocked(
     const findings = structureNativeFindings({
       paths: options.paths,
       state,
-      findings: verificationEvidence.findingCodes.map((code) => ({
-        code,
-        message: `Native verification evidence is not current: ${code}`,
-      })),
+      findings: verificationEvidence.findingCodes.map((code) => {
+        // For binding mismatches, fold the per-receipt diagnostics into the
+        // finding message so the Agent sees exactly which receipts diverged
+        // and on which fields, without a second round-trip to status.
+        if (
+          code === 'verification-receipt-binding-mismatch' &&
+          verificationEvidence.receiptBindingFailures &&
+          verificationEvidence.receiptBindingFailures.length > 0
+        ) {
+          const detail = verificationEvidence.receiptBindingFailures
+            .map((failure) => {
+              const target = failure.acceptanceId
+                ? `${failure.ref}[${failure.acceptanceId}]`
+                : failure.ref;
+              return `${target} -> ${failure.mismatches.join('; ')}`;
+            })
+            .join(' | ');
+          return {
+            code,
+            message: formatNativeReceiptBindingMismatchMessage({ change: state.name, detail }),
+          };
+        }
+        return {
+          code,
+          message: `Native verification evidence is not current: ${code}`,
+        };
+      }),
     });
     return {
       change: state,

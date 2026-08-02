@@ -2,6 +2,34 @@
 
 All notable changes to @rpamis/comet will be documented in this file.
 
+## What's Changed [0.4.0-beta.13] - 2026-08-02
+
+Beta 13 makes everyday workflow operations faster and makes uninstalling and reading Dashboard status easier.
+
+### Added
+
+- **Native receipt refresh**: New `comet native receipt refresh <change> [--apply]` checks stale verification receipts and reissues eligible manual receipts. Automated checks that need a real rerun remain clearly identified instead of being marked as passed.
+
+### Changed
+
+- **Selective workflow removal**: Interactive `comet uninstall` now lets you remove Native, Classic, or both from each installed target. Removing one retains the other workflow and shared configuration; when removing Classic, OpenSpec and Superpowers Skills are optional and remain selected off by default.
+- **Everyday responsiveness**: CLI startup, Classic and Native workflow commands, write checks, and Native snapshot updates are faster. Native reuses results for unchanged files while continuing to inspect real changes.
+- **Fast public workflow commands**: High-frequency Native, Classic, and workflow-resolution commands keep the stable `comet` CLI interface while dispatching internally to package-owned runtime bundles, reducing cold-start overhead without relying on host-specific Skill paths.
+- **Dashboard workspace**: Dashboard offers clearer project switching, search, and change-detail views, discovers projects launched from nested directories, and presents Classic changes from legacy and docs layouts alongside the separate read-only Native workspace.
+
+### Fixed
+
+- **Native baseline scope**: Newly initialized Native projects no longer spend their bounded baseline budget on Comet's replicated platform Skill directories, so `comet native new` remains usable after installing every supported platform while project source and `.github/workflows` stay in scope.
+- **Classic configuration compatibility**: Setup and update retain an existing Classic project’s directory choice and more reliably recognize a usable directory when an older project configuration is incomplete.
+- **Portable workflow execution**: Native and Classic Skills now call the public `comet` CLI instead of searching platform-specific Skill directories or invoking internal bundles. Missing CLI installations stop with a clear error, while workflow routing still immediately loads the selected Skill through the Skill tool.
+- **Classic execution choices**: Classic now presents every workflow-supported isolation and execution choice, then runs the user’s selection and reports any error instead of pre-screening options.
+- **Dashboard status feedback**: Classic change verification uses green, red, amber, and neutral status colors for pass, fail, pending, and unknown states; invalid Dashboard ports now fail with a clear error before startup.
+
+### Security
+
+- **Classic phase protection**: Host configuration directories and worktrees no longer bypass Classic phase restrictions, preventing source writes hidden under paths such as `.claude/` during non-Build phases.
+- **Dashboard build dependency**: Updated the Dashboard CSS build dependency to prevent untrusted source-map references from reading unintended reachable map files.
+
 ## What's Changed [0.4.0-beta.12] - 2026-07-30
 
 ### Changed

@@ -88,12 +88,24 @@ describe('Comet Native Skills', () => {
     }
   });
 
+  it('uses only the public CLI without platform-directory discovery in Chinese', async () => {
+    const source = await read('zh', 'SKILL.md');
+
+    expect(source).toContain('只使用 PATH 中的公开 `comet native <cmd>` CLI');
+    expect(source).toContain('`comet native <cmd>`');
+    expect(source).toContain('不得搜索 Skill 文件、枚举平台目录或直接调用内部 bundle');
+    expect(source).not.toContain('Base directory');
+    expect(source).not.toContain('comet-native-<cmd>.mjs');
+    expect(source).not.toContain('"$PWD/../.claude/skills"');
+    expect(source).not.toContain('"$HOME/.claude/skills"');
+  });
+
   it('makes the acceptance-gap completion loop explicit', async () => {
     const variants = [
       {
         language: 'zh' as const,
         terms: [
-          'status <change-name> --details',
+          'comet native status <change-name> --details',
           'failed/missing acceptance',
           'checkpoint 不是完成证据',
           '执行一次完整审查',
@@ -106,7 +118,7 @@ describe('Comet Native Skills', () => {
       {
         language: 'en' as const,
         terms: [
-          'status <change-name> --details',
+          'comet native status <change-name> --details',
           'failed or missing acceptance items',
           'a checkpoint is not completion evidence',
           'perform one complete review',
@@ -273,25 +285,26 @@ describe('Comet Native Skills', () => {
   it('keeps executable commands while excluding trust provisioning internals', async () => {
     for (const language of ['en', 'zh'] as const) {
       const commands = await read(language, 'reference/commands.md');
-      for (const command of [
-        'init',
-        'root show',
-        'root move',
-        'new',
-        'spec remove',
-        'spec rebase',
-        'show',
-        'status',
-        'select',
-        'checkpoint',
-        'check',
-        'evidence format',
-        'receipt manual',
-        'receipt automated',
-        'next',
-        'archive',
-        'doctor',
-      ]) {
+      const expectedCommands = [
+        'comet native init',
+        'comet native root show',
+        'comet native root move',
+        'comet native new',
+        'comet native spec remove',
+        'comet native spec rebase',
+        'comet native show',
+        'comet native status',
+        'comet native select',
+        'comet native checkpoint',
+        'comet native check',
+        'comet native evidence format',
+        'comet native receipt manual',
+        'comet native receipt automated',
+        'comet native next',
+        'comet native archive',
+        'comet native doctor',
+      ];
+      for (const command of expectedCommands) {
         expect(commands, `${language}: ${command}`).toContain(command);
       }
       expect(commands).not.toContain('--creation-authorization');

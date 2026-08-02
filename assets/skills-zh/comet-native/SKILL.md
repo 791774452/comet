@@ -19,10 +19,25 @@ Native 保存需求、完整目标规格、状态和证据。你负责理解、�
 
 Native 主流程不依赖任何外部 Skill。
 
+## CLI 引导
+
+Native Skill 只使用 PATH 中的公开 `comet native <cmd>` CLI；随 Skill 发布的命令 bundle 属于内部安装与 Runtime 资产，不由 Skill 搜索或直接调用。若命令返回 `command not found`、`executable not found` 或 `ENOENT`，停止并说明 Comet CLI 安装不完整；不得搜索 Skill 文件、枚举平台目录或直接调用内部 bundle。
+
+常用命令：
+
+```bash
+comet native status [--json]
+comet native show <change-name>
+comet native select <change-name>
+comet native new <change-name> [--language en|zh-CN]
+comet native next <change-name> --summary <text> [--confirmed]
+comet native archive <change-name> --dry-run
+```
+
 ## 开始或恢复
 
 1. 运行 `comet native status`，确认当前 change 和 phase。
-2. 对目标运行 `comet native show <change-name>`；Verify、Archive 或失败后的 Build 再运行 `status <change-name> --details`。
+2. 对目标运行 `comet native show <change-name>`；Verify、Archive 或失败后的 Build 再对 status 命令加 `--details` 运行。
 3. 需要更多 acceptance 时，按 `acceptancePage.nextCursor` 分页；findings 被截断时，先处理已返回项，再重新读取。
 4. 确认目标后运行 `comet native select <change-name>`。
 
@@ -79,7 +94,7 @@ comet native next <change-name> \
 
 进入 Build 后按以下循环收敛：
 
-1. 运行 `status <change-name> --details` 并读取当前需要的 acceptance 页；上一轮 Verify 失败时，优先处理 failed/missing acceptance 和 failed check。
+1. 运行 `comet native status <change-name> --details`，读取当前需要的 acceptance 页；上一轮 Verify 失败时，优先处理 failed/missing acceptance 和 failed check。
 2. 完成一批相关的实际修复。需要中断时可以写 checkpoint，但 checkpoint 不是完成证据。
 3. 形成候选实现后，重新读取 brief、完整规格和全部 acceptance，执行一次完整审查。
 4. 运行真实验证并提交 Verify 结果。

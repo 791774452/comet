@@ -1,4 +1,16 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import {
+  ApartmentOutlined,
+  BulbOutlined,
+  CheckCircleOutlined,
+  CheckOutlined,
+  CopyOutlined,
+  FlagOutlined,
+  SafetyCertificateOutlined,
+  UserOutlined,
+} from '@ant-design/icons';
+import { Button, Tooltip } from 'antd';
+import { useAnimatedNumber } from './use-animated-number.js';
 
 const PHASES = [
   ['shape', 'Shape'],
@@ -38,7 +50,7 @@ const CONFLICT_LABELS = {
   'possible-overlap': '可能重叠',
 };
 
-export function NativeWorkflowPanel({ native, git, query, onPreview }) {
+export function NativeWorkflowPanel({ native, git, query, onPreview, onCopyChangeName }) {
   const [tab, setTab] = useState('active');
   const changes = useMemo(() => {
     const source = native?.changes ?? [];
@@ -71,12 +83,13 @@ export function NativeWorkflowPanel({ native, git, query, onPreview }) {
             : '当前项目尚无 Native 状态'
         }
       />
+      <NativeWorkflowSuggestion change={selected} />
       <NativeSummaryCards native={native} />
       <SectionHead title="Native 变更工作区" hint="查看轻量状态、验证结果与冲突摘要" />
       {!native || native.changes.length === 0 ? (
         <EmptyState />
       ) : (
-        <div className="grid min-w-0 items-start gap-5 xl:grid-cols-[minmax(260px,320px)_minmax(0,1fr)] 2xl:grid-cols-[minmax(260px,320px)_minmax(0,1fr)_minmax(260px,320px)]">
+        <div className="dashboard-workspace-region grid min-w-0 items-start gap-5 xl:grid-cols-[minmax(260px,320px)_minmax(0,1fr)] 2xl:grid-cols-[minmax(260px,320px)_minmax(0,1fr)_minmax(260px,320px)]">
           <NativeChangesExplorer
             changes={changes}
             selectedName={selected?.name ?? null}
@@ -84,24 +97,81 @@ export function NativeWorkflowPanel({ native, git, query, onPreview }) {
             onTab={setTab}
             onSelect={setSelectedName}
           />
-          {selected && <NativeChangeDetail change={selected} onPreview={onPreview} />}
-          {selected && <NativeSidePanel change={selected} git={git} />}
+          {selected ? (
+            <>
+              <NativeChangeDetail
+                change={selected}
+                onPreview={onPreview}
+                onCopyChangeName={onCopyChangeName}
+              />
+              <NativeSidePanel change={selected} git={git} />
+            </>
+          ) : (
+            <NativeWorkspaceEmptyState native={native} tab={tab} query={query} onTab={setTab} />
+          )}
         </div>
       )}
     </div>
   );
 }
 
+function NativeWorkspaceEmptyState({ native, tab, query, onTab }) {
+  const hasArchivedChanges = (native?.changes ?? []).some((change) => change.status === 'archived');
+  const showArchiveShortcut = tab === 'active' && !query.trim() && hasArchivedChanges;
+  const title = showArchiveShortcut ? '当前没有活跃的 Native change' : '没有匹配的 Native change';
+  const description = showArchiveShortcut
+    ? '当前项目的 Native 工作已全部归档。你可以查看历史验证记录与变更范围。'
+    : '调整搜索条件或切换筛选，即可继续查看项目中的 Native change。';
+
+  return (
+    <section className="native-workspace-empty flex min-h-[360px] items-center justify-center rounded-lg bg-bg p-8 text-center shadow-raised xl:col-span-1 2xl:col-span-2">
+      <div className="max-w-sm">
+        <span className="mx-auto grid size-12 place-items-center rounded-2xl bg-accent-softer text-xl text-accent">
+          ◇
+        </span>
+        <h3 className="mt-5 text-lg font-semibold tracking-tight">{title}</h3>
+        <p className="mt-2 text-sm leading-relaxed text-muted">{description}</p>
+        {showArchiveShortcut && (
+          <Button className="mt-5" type="primary" onClick={() => onTab('archived')}>
+            查看已归档变更
+          </Button>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function NativeWorkflowSuggestion({ change }) {
+  return (
+    <section className="dashboard-priority-banner" role="status" aria-label="工作流建议">
+      <div className="dashboard-priority-title">
+        <BulbOutlined aria-hidden="true" />
+        <span>下一步建议</span>
+      </div>
+      <p>
+        {change
+          ? change.status === 'archived'
+            ? '当前变更已经归档，可继续查看验证证据与历史进展。'
+            : (change.progress?.nextAction ?? continuationLabel(change.continuation))
+          : '当前没有可展示的 Native change。'}
+      </p>
+    </section>
+  );
+}
+
 function SectionHead({ title, hint }) {
   return (
     <div className="mb-4 mt-6 flex flex-wrap items-baseline gap-3 first:mt-2">
-      <h2 className="text-[28px] font-bold leading-tight">{title}</h2>
-      <span className="text-sm text-muted">{hint}</span>
+      <h2 className="dashboard-section-heading text-[20px] font-semibold leading-[1.3] tracking-[-0.018em]">
+        {title}
+      </h2>
+      <span className="dashboard-section-hint text-[13px] leading-5 text-muted">{hint}</span>
     </div>
   );
 }
 
 function NativeSummaryCards({ native }) {
+  const [selectedIndex, setSelectedIndex] = useState(0);
   const changes = native?.changes ?? [];
   const active = changes.filter((change) => change.phase !== 'archive').length;
   const archiveReady = changes.filter((change) => change.archiveReady).length;
@@ -113,34 +183,68 @@ function NativeSummaryCards({ native }) {
     ? native.conflicts.definiteConflict + native.conflicts.possibleOverlap
     : 0;
   const cards = [
-    ['活跃变更', active, '当前 Native workflow', active ? '进行中' : '清零'],
-    ['可归档变更', archiveReady, '验证证据已就绪', archiveReady ? '就绪' : '暂无'],
-    ['等待用户', awaitingUser, '需要明确决策', awaitingUser ? '待确认' : '无需'],
+    ['活跃变更', active, '当前 Native workflow', active ? '进行中' : '清零', FlagOutlined],
+    [
+      '可归档变更',
+      archiveReady,
+      '验证证据已就绪',
+      archiveReady ? '就绪' : '暂无',
+      CheckCircleOutlined,
+    ],
+    ['等待用户', awaitingUser, '需要明确决策', awaitingUser ? '待确认' : '无需', UserOutlined],
     [
       '验证需关注',
       verificationAttention,
       '过期、无效或部分证据',
       verificationAttention ? '复核' : '健康',
+      SafetyCertificateOutlined,
     ],
-    ['关联冲突', conflicts, 'Native change 关系', conflicts ? '关注' : '无冲突'],
+    ['关联冲突', conflicts, 'Native change 关系', conflicts ? '关注' : '无冲突', ApartmentOutlined],
   ];
 
   return (
-    <section className="grid gap-4 md:grid-cols-3 lg:grid-cols-5">
-      {cards.map(([label, value, note, tag]) => (
-        <article
+    <section className="dashboard-summary-strip dashboard-overview-summary-strip">
+      {cards.map(([label, value, note, tag, Icon], index) => (
+        <NativeSummaryCard
           key={label}
-          className="summary-card-glow relative overflow-hidden rounded-lg bg-bg p-5 shadow-raised transition-shadow duration-200 hover:shadow-lg"
-        >
-          <div className="text-sm font-medium text-muted">{label}</div>
-          <div className="mt-1 text-[40px] font-bold leading-none tabular-nums">{value}</div>
-          <div className="mt-2 truncate text-xs text-meta">{note}</div>
-          <span className="absolute right-5 top-5 rounded-full bg-surface px-2.5 py-1 text-[11px] font-semibold text-fg-2">
-            {tag}
-          </span>
-        </article>
+          label={label}
+          value={value}
+          note={note}
+          tag={tag}
+          icon={Icon}
+          tone={`dashboard-summary-tone-${index + 1}`}
+          selected={selectedIndex === index}
+          onClick={() => setSelectedIndex(index)}
+        />
       ))}
     </section>
+  );
+}
+
+function NativeSummaryCard({ label, value, note, tag, icon: Icon, tone, selected, onClick }) {
+  // 进入页面或数值变化时，从 0 滚动到目标值；数值不变则保持，避免每次自动刷新都重滚。
+  const animatedValue = useAnimatedNumber(value, 850, value);
+  return (
+    <button
+      type="button"
+      aria-pressed={selected}
+      className={`dashboard-overview-summary-card dashboard-summary-card dashboard-summary-metric-cell ${tone} ${selected ? 'dashboard-summary-primary' : ''}`}
+      onClick={onClick}
+    >
+      <div className="dashboard-summary-card-top">
+        <div className="min-w-0">
+          <div className="text-[13px] font-medium text-muted">{label}</div>
+          <div className="dashboard-summary-metric mt-1 text-[28px] font-semibold leading-none tabular-nums">
+            {Math.round(animatedValue)}
+          </div>
+        </div>
+        <span className="dashboard-summary-icon" aria-hidden="true">
+          <Icon />
+        </span>
+      </div>
+      <span className="dashboard-summary-status">{tag}</span>
+      <div className="mt-2 truncate text-[11px] text-meta">{note}</div>
+    </button>
   );
 }
 
@@ -208,14 +312,33 @@ function NativeChangesExplorer({ changes, selectedName, tab, onTab, onSelect }) 
   );
 }
 
-function NativeChangeDetail({ change, onPreview }) {
+function NativeChangeDetail({ change, onPreview, onCopyChangeName }) {
   const findingCodes = change.findings.codes;
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => setCopied(false), [change.name]);
 
   return (
     <section className="min-w-0 rounded-lg bg-bg shadow-raised">
       <div className="flex items-start gap-4 border-b border-border-soft px-5 py-4">
         <div className="min-w-0 flex-1">
-          <h3 className="truncate text-base font-semibold">{change.name}</h3>
+          <div className="flex min-w-0 items-center gap-2">
+            <h3 className="truncate text-base font-semibold">{change.name}</h3>
+            <Tooltip title="复制 Change 名称">
+              <Button
+                type="text"
+                size="small"
+                icon={copied ? <CheckOutlined /> : <CopyOutlined />}
+                aria-label={copied ? '已复制 Change 名称' : '复制 Change 名称'}
+                onClick={() =>
+                  onCopyChangeName?.(change.name)?.then(() => {
+                    setCopied(true);
+                    window.setTimeout(() => setCopied(false), 1600);
+                  })
+                }
+              />
+            </Tooltip>
+          </div>
           <div className="mt-1 flex flex-wrap gap-3 text-xs text-meta">
             <span>native</span>
             <span>

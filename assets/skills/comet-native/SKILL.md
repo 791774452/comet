@@ -19,10 +19,25 @@ Config, selection, change state, and formal artifacts on disk take precedence ov
 
 The Native main workflow does not depend on any external Skill.
 
+## CLI bootstrap
+
+The Native Skill uses only the public `comet native <cmd>` CLI on PATH. Packaged command bundles are internal installation and Runtime assets; the Skill does not search for or invoke them directly. If a command returns `command not found`, `executable not found`, or `ENOENT`, stop and explain that the Comet CLI installation is incomplete. Do not search for Skill files, enumerate platform directories, or invoke an internal bundle directly.
+
+Common commands:
+
+```bash
+comet native status [--json]
+comet native show <change-name>
+comet native select <change-name>
+comet native new <change-name> [--language en|zh-CN]
+comet native next <change-name> --summary <text> [--confirmed]
+comet native archive <change-name> --dry-run
+```
+
 ## Start or resume
 
 1. Run `comet native status` to identify the current change and phase.
-2. Run `comet native show <change-name>` for the target. In Verify, Archive, or Build after a failure, also run `status <change-name> --details`.
+2. Run `comet native show <change-name>` for the target. In Verify, Archive, or Build after a failure, also run the status command with `--details`.
 3. When more acceptance items are needed, follow `acceptancePage.nextCursor`. If findings are truncated, handle the returned findings and then read details again.
 4. After confirming the target, run `comet native select <change-name>`.
 
@@ -79,7 +94,7 @@ If no code changed or the Runtime cannot prove complete scope, read the command 
 
 After entering Build, converge through this loop:
 
-1. Run `status <change-name> --details` and read the currently required acceptance pages. After a Verify failure, prioritize failed or missing acceptance items and failed checks.
+1. Run `comet native status <change-name> --details` and read the currently required acceptance pages. After a Verify failure, prioritize failed or missing acceptance items and failed checks.
 2. Complete one related batch of real repairs. You may write a checkpoint before interruption, but a checkpoint is not completion evidence.
 3. When a candidate implementation exists, reread the brief, complete specifications, and every acceptance item, then perform one complete review.
 4. Run real validation and submit the Verify result.

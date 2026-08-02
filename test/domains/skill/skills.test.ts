@@ -41,6 +41,7 @@ import {
   resolveArtifactLanguage,
 } from '../../../domains/skill/languages.js';
 import { assertClassicLayoutInitializationSafe } from '../../../domains/comet-classic/classic-layout-initialization.js';
+import { DEFAULT_WORKFLOW_NATIVE_SNAPSHOT_CONFIG } from '../../../domains/workflow-contract/project-config.js';
 
 describe('skills', () => {
   let tmpDir: string;
@@ -90,7 +91,7 @@ describe('skills', () => {
       expect(resolveArtifactLanguage(undefined).id).toBe('en');
     });
 
-    it('does not re-evaluate applicability after the host loads the comet skill', async () => {
+    it('does not re-evaluate applicability after the comet skill loads', async () => {
       const zhContent = await fs.readFile(
         path.join(getAssetsDir(), 'skills-zh', 'comet', 'SKILL.md'),
         'utf-8',
@@ -103,7 +104,7 @@ describe('skills', () => {
       expect(zhContent).toContain(
         '当用户明确调用 /comet，或明确要求使用 Comet 但未指定 Native/Classic 时使用',
       );
-      expect(zhContent).toContain('一旦宿主加载本 Skill，就视为已经选定 `/comet` 入口');
+      expect(zhContent).toContain('一旦加载本 Skill，就视为已经选定 `/comet` 入口');
       expect(zhContent).toContain('不得重新判断任务是否适合 Comet');
       expect(zhContent).toContain('必须立即执行下方入口解析');
       expect(zhContent).toContain('只按返回的 `skill` 选择下列一个入口');
@@ -113,13 +114,14 @@ describe('skills', () => {
       expect(zhContent).toContain(
         '**立即执行：** 使用 Skill 工具加载 `comet-classic` 技能。禁止跳过此步骤。',
       );
+      expect(zhContent).toContain('不得搜索 Skill 文件、扫描平台配置目录或直接调用内部 bundle');
       expect(zhContent).toContain('技能加载后，把用户原始请求完整交给已加载的入口 Skill');
 
       expect(enContent).toContain(
         'Use when the user explicitly invokes /comet or asks to use Comet without choosing Native or Classic',
       );
       expect(enContent).toContain(
-        'Once the host loads this Skill, treat the `/comet` entry as selected',
+        'Once this Skill is loaded, treat the `/comet` entry as selected',
       );
       expect(enContent).toContain('do not re-evaluate whether the task is suitable for Comet');
       expect(enContent).toContain('Immediately perform the entry resolution below');
@@ -187,8 +189,24 @@ describe('skills', () => {
         );
         const allContent = [main, ...references].join('\n');
 
+        const requiredCommands =
+          languageDir === 'skills-zh'
+            ? [
+                'comet native select <change-name>',
+                'comet native check <change-name>',
+                'comet native archive <change-name> --dry-run',
+                'comet native spec rebase',
+                'comet native checkpoint',
+              ]
+            : [
+                'comet native select <change-name>',
+                'comet native check <change-name>',
+                'comet native archive <change-name> --dry-run',
+                'comet native spec rebase',
+                'comet native checkpoint',
+              ];
         for (const required of [
-          'comet native select <change-name>',
+          ...requiredCommands,
           'continuation.disposition',
           '[blocking]',
           '--confirmed',
@@ -198,14 +216,10 @@ describe('skills', () => {
           'physical-selection-changed',
           'scope-detail-overflow',
           'acceptancePage.nextCursor',
-          'comet native check <change-name>',
           '--result pass|fail',
           '--report verification.md',
           '--override-repair',
-          'comet native archive <change-name> --dry-run',
           '--expect-preflight',
-          'comet native spec rebase',
-          'comet native checkpoint',
           'baseline-snapshot-missing',
           'workspace-root-changed',
         ]) {
@@ -561,11 +575,12 @@ describe('skills', () => {
       await expect(fs.stat(plansDir)).resolves.toBeDefined();
     });
 
-    it('does not reuse an unconfigured artifact root without initialization authorization', async () => {
+    it('reuses an existing desired artifact root without a layout conflict', async () => {
       await createWorkingDirs(tmpDir);
-      await expect(createWorkingDirs(tmpDir)).rejects.toThrow(
-        /cannot initialize Classic layout without/iu,
-      );
+      // After beta.13's Classic configuration recovery, a project whose desired
+      // (docs) root already exists and has no conflicting legacy root can be
+      // re-initialized in place instead of being rejected as unauthorized.
+      await expect(createWorkingDirs(tmpDir)).resolves.toBeUndefined();
     });
 
     it('installs ambient resume instructions while preserving user content', async () => {
@@ -1650,7 +1665,7 @@ describe('skills', () => {
 
       expect(zhComet).toContain('决策点是阻塞点');
       expect(zhComet).toContain('CometIntentFrame');
-      expect(zhComet).toContain('node "$COMET_INTENT" route --stdin');
+      expect(zhComet).toContain('comet classic intent route --stdin');
       expect(zhComet).toContain('**CometIntentFrame 最小骨架**');
       expect(zhComet).toContain('"schema_version": "comet.intent.v1"');
       expect(zhComet).toContain('"slots": {');
@@ -1683,14 +1698,13 @@ describe('skills', () => {
       expect(zhHotfix).toContain('复核 `risk_signal` 和升级信号');
       expect(zhTweak).toContain('入口传入 intent frame');
       expect(zhTweak).toContain('复核 `risk_signal` 和升级信号');
-      expect(zhScripts).toContain('COMET_INTENT="$COMET_SCRIPTS_DIR/comet-intent.mjs"');
+      expect(zhScripts).toContain('comet classic intent route --stdin');
+      expect(zhScripts).not.toContain('<comet-intent-script>');
       expect(zhComet).toContain('`comet/reference/decision-point.md`');
-      expect(zhDecisionPoint).toContain('优先使用 `AskUserQuestion`');
-      expect(zhDecisionPoint).toContain('第一次调用 `AskUserQuestion` 失败');
-      expect(zhDecisionPoint).toContain('本会话后续决策点不得反复重试 `AskUserQuestion`');
-      expect(zhDecisionPoint).toContain(
-        '若当前平台没有结构化提问工具，则必须在对话中提出明确选项并停止流程',
-      );
+      expect(zhDecisionPoint).toContain('存在 `AskUserQuestion` 时，使用它展示单选/多选选项');
+      expect(zhDecisionPoint).toContain('若无法使用 `AskUserQuestion`');
+      expect(zhDecisionPoint).toContain('本会话后续决策点不得反复重试它');
+      expect(zhDecisionPoint).toContain('否则在对话中提出明确选项并等待用户回复');
       expect(zhDecisionPoint).toContain('不得用推荐规则、默认值、历史偏好');
       expect(zhOpen).toContain('### 1b. 需求与 Change 名称解析（默认不阻塞）');
       expect(zhOpen).toContain('范围与命名都明确时直接继续');
@@ -1757,7 +1771,7 @@ describe('skills', () => {
       expect(zhTweak).toContain('不得直接进入 `/comet-design`');
       expect(zhComet).toContain('`verify_result: fail` → 自动调用 `/comet-build` 继续修复');
       expect(zhComet).not.toContain(
-        '`verify_result: fail` → `node "$COMET_STATE" transition <name> verify-fail` 后 `/comet-build`',
+        '`verify_result: fail` → `comet state transition <name> verify-fail` 后 `/comet-build`',
       );
       expect(zhHotfix).toContain(
         '若 hotfix 创建了 delta spec，则根据 comet-verify 的规模评估规则进入完整验证路径',
@@ -1779,9 +1793,7 @@ describe('skills', () => {
       expect(zhDesign).toContain('### 3a. 可选主动式上下文压缩');
 
       // MEDIUM: comet-verify Spec drift requires user choice
-      expect(zhVerify).toContain(
-        '必须使用当前平台可用的用户输入/确认机制以单选题形式暂停并等待用户选择处理方式',
-      );
+      expect(zhVerify).toContain('必须以单选题形式暂停、展示处理方式并等待用户选择');
 
       // MEDIUM: comet/SKILL.md build phase resume recognizes plan-ready pause before all build decisions
       expect(zhComet).toContain(
@@ -1840,7 +1852,7 @@ describe('skills', () => {
 
       // LOW: comet-build "中" level requires user confirmation before brainstorming
       expect(zhBuild).toContain(
-        '使用当前平台可用的用户输入/确认机制暂停并等待用户确认后**，必须使用 Skill 工具加载 Superpowers `brainstorming`',
+        '暂停、展示选择并等待用户明确确认后**，必须使用 Skill 工具加载 Superpowers `brainstorming`',
       );
 
       // LOW: comet-build 50% threshold is a hard decision point
@@ -1885,21 +1897,22 @@ describe('skills', () => {
       expect(zhVerify).toContain('选项 A 属于 verify 阶段允许产物');
 
       // Dependency triggers must be explicit skill invocations, not ambiguous prose.
-      expect(zhBuild).toContain('必须使用 Skill 工具加载 Superpowers `using-git-worktrees`');
+      expect(zhBuild).toContain(
+        '**立即执行：** 使用 Skill 工具加载 Superpowers `using-git-worktrees`',
+      );
       expect(zhBuild).not.toContain('或使用原生 `EnterWorktree` 工具');
       expect(zhBuild).toContain('必须使用 Skill 工具加载 Superpowers `brainstorming`');
       expect(zhComet).toContain(
         '若 `build_mode: subagent-driven-development`，不得在主窗口直接执行任务',
       );
       expect(zhBuild).toContain('主会话只负责协调，禁止直接编写实现代码');
-      expect(zhBuild).toContain('若无法确认真实后台调度能力');
+      expect(zhBuild).toContain('提供本工作流支持的全部工作区隔离和执行方式');
       expect(zhBuild).toContain(
-        '先确认当前平台存在可调用的真实后台 subagent / Task / multi-agent 调度能力',
+        '不得预检、推断或筛除其他 Skill、分支、worktree、子代理派发或 model 选择能否使用',
       );
+      expect(zhBuild).not.toContain('真实异步派发、独立上下文、结果回收和所需交接能力');
+      expect(zhBuild).not.toContain('`platform-default`');
       expect(zhBuild).toContain('`comet state set <name> subagent_dispatch confirmed`');
-      expect(zhBuild).toContain(
-        '用户在该联合决策中选择主窗口执行后，先运行 `comet state set <name> build_mode executing-plans`',
-      );
       expect(zhBuild).not.toContain('使用 Skill 工具加载对应技能');
       expect(zhBuild).toContain('tdd_mode');
       expect(zhBuild).toContain('`comet state set <name> tdd_mode <tdd|direct>`');
@@ -2032,7 +2045,7 @@ describe('skills', () => {
 
       expect(enComet).toContain('Decision points are blocking points');
       expect(enComet).toContain('CometIntentFrame');
-      expect(enComet).toContain('node "$COMET_INTENT" route --stdin');
+      expect(enComet).toContain('comet classic intent route --stdin');
       expect(enComet).toContain('**Minimal CometIntentFrame Skeleton**');
       expect(enComet).toContain('"schema_version": "comet.intent.v1"');
       expect(enComet).toContain('"slots": {');
@@ -2065,14 +2078,15 @@ describe('skills', () => {
       expect(enHotfix).toContain('recheck `risk_signal` and escalation signals');
       expect(enTweak).toContain('intent frame from the entry');
       expect(enTweak).toContain('recheck `risk_signal` and escalation signals');
-      expect(enScripts).toContain('COMET_INTENT="$COMET_SCRIPTS_DIR/comet-intent.mjs"');
-      expect(enDecisionPoint).toContain('prefer `AskUserQuestion`');
-      expect(enDecisionPoint).toContain('the first `AskUserQuestion` call fails');
+      expect(enScripts).toContain('comet classic intent route --stdin');
+      expect(enScripts).not.toContain('<comet-intent-script>');
       expect(enDecisionPoint).toContain(
-        'do not repeatedly retry `AskUserQuestion` for later decision points in the same session',
+        'Use `AskUserQuestion` for single-select or multi-select choices',
       );
+      expect(enDecisionPoint).toContain('When `AskUserQuestion` cannot be used');
+      expect(enDecisionPoint).toContain('do not repeatedly retry it for later decision points');
       expect(enDecisionPoint).toContain(
-        'If the current platform has no structured question tool, ask clear options in the conversation and stop until the user replies',
+        'otherwise ask clear options in the conversation and wait for the reply',
       );
       expect(enDecisionPoint).toContain(
         'Never substitute recommendation rules, defaults, historical preferences',
@@ -2168,7 +2182,7 @@ describe('skills', () => {
         '`verify_result: fail` → Invoke `/comet-build` automatically to continue repair',
       );
       expect(enComet).not.toContain(
-        '`verify_result: fail` → `node "$COMET_STATE" transition <name> verify-fail` then `/comet-build`',
+        '`verify_result: fail` → `comet state transition <name> verify-fail` then `/comet-build`',
       );
 
       expect(enHotfix).toContain('handle it through this file\'s "Upgrade Assessment"');
@@ -2181,7 +2195,7 @@ describe('skills', () => {
       expect(enTweak).toContain('branch-handling decision after the archive commit');
       expect(enDesign).toContain('The brainstorming phase does not write to the Design Doc file');
       expect(enVerify).toContain(
-        "must use the current platform's available user input/confirmation mechanism as a single-select question to pause and wait for the user to choose the handling method",
+        'pause, present the handling methods as a single-select question, and wait for the user to choose',
       );
       expect(enComet).toContain(
         'first check `build_pause`, `plan`, `isolation`, `build_mode`, `tdd_mode`, and `review_mode`',
@@ -2245,7 +2259,7 @@ describe('skills', () => {
       expect(enHotfix).toContain('6 quick checks');
       expect(enHotfix).toContain('task count alone does not route to `/comet-build`');
       expect(enBuild).toContain(
-        "Must use the current platform's available user input/confirmation mechanism to pause and wait for the user to explicitly confirm",
+        'Pause, present the choice, and wait for the user to explicitly confirm',
       );
       expect(enBuild).toContain(
         'must follow the `comet/reference/decision-point.md` protocol to pause and wait for the user to decide whether to split into a new change',
@@ -2281,7 +2295,7 @@ describe('skills', () => {
       expect(enComet).toContain('Open phase large PRD split confirmation');
       expect(enVerify).toContain('Option A is a verify phase allowed artifact');
       expect(enBuild).toContain(
-        'Must use the Skill tool to load the Superpowers `using-git-worktrees`',
+        '**Immediately execute:** Use the Skill tool to load the Superpowers `using-git-worktrees`',
       );
       expect(enBuild).not.toContain('native `EnterWorktree` tool');
       expect(enBuild).toContain(
@@ -2498,6 +2512,10 @@ describe('skills', () => {
       expect(zhDispatch).toContain('不得把多个 task 打包给同一个 agent');
       expect(zhDispatch).toContain('每个 task 派发一个全新的后台 implementer agent');
       expect(zhDispatch).toContain('task reviewer、修复 agent 和 final reviewer');
+      expect(zhDispatch).toContain('使用 agent / Task / 多 agent 派发机制');
+      expect(zhDispatch).toContain('不得把缺少选择参数写成阻塞条件');
+      expect(zhDispatch).not.toContain('工具名称相似不等于满足异步派发');
+      expect(zhDispatch).not.toContain('platform-default');
       expect(zhDispatch).toContain(
         'Language: 使用 comet state get <name> language 读取到的 Comet 配置产物语言输出',
       );
@@ -2555,15 +2573,18 @@ describe('skills', () => {
       ]) {
         expect(zhDispatch, `zh dispatch should not bind to ${forbidden}`).not.toContain(forbidden);
       }
-      expect(zhDispatch).toContain('comet state task-checkoff <plan-file> <plan-task-text>');
+      expect(zhDispatch).toContain('comet state task-checkoff "<plan-file>" "<plan-task-text>"');
+      expect(zhDispatch).toContain(
+        'comet state task-checkoff "<classic-change-dir>/tasks.md" "<openspec-task-text>"',
+      );
       expect(zhDispatch).not.toContain('PLAN_MATCHES="$(grep -cF');
       expect(zhDispatch).toContain('RED 失败命令与失败摘要');
       expect(zhDispatch).toContain('GREEN 通过命令与通过摘要');
       expect(zhDispatch).not.toContain("grep -n '\\- \\[ \\]' <classic-change-dir>/tasks.md");
       expect(zhDispatch).toContain('禁止总结、禁止询问用户是否继续、禁止在任务之间等待用户输入');
       expect(zhDispatch).toContain('存在无法从仓库、计划或既有上下文消除的真实歧义');
-      expect(zhDispatch).toContain('后台调度能力在执行中失效属于运行停止条件');
-      expect(zhDispatch).toContain('不得另设“是否改用 executing-plans”的停顿点');
+      expect(zhDispatch).toContain('子代理派发操作失败属于运行停止条件');
+      expect(zhDispatch).toContain('将当前任务记录为 `BLOCKED` 并写明失败原因');
       expect(zhDispatch).toContain('不得加载 `finishing-a-development-branch`');
       expect(zhDispatch).toContain('返回 `comet-build` 继续执行退出条件、阶段守卫和后续阶段衔接');
       expect(zhRecovery).toContain('重新加载 Superpowers `subagent-driven-development` 技能');
@@ -2608,6 +2629,16 @@ describe('skills', () => {
       expect(enBuild).toContain(
         'update `isolation`, execution method, TDD mode, and code review mode fields',
       );
+      expect(enBuild).toContain(
+        'provide every workspace-isolation and execution choice supported by this workflow',
+      );
+      expect(enBuild).toContain(
+        'Do not preflight, infer, or filter whether another Skill, branch, worktree',
+      );
+      expect(enBuild).not.toContain(
+        'real asynchronous execution, isolated context, result collection',
+      );
+      expect(enBuild).not.toContain('`platform-default`');
       expect(enBuild).not.toContain(
         'ask the user to choose both workspace isolation ' + 'and execution method',
       );
@@ -2622,8 +2653,20 @@ describe('skills', () => {
         'Before dispatching the first task, complete the Superpowers `subagent-driven-development` skill pre-flight plan review',
       );
       expect(enDispatch).toContain('Never bundle multiple tasks into one agent');
+      expect(enDispatch).toContain('comet state task-checkoff "<plan-file>" "<plan-task-text>"');
+      expect(enDispatch).toContain(
+        'comet state task-checkoff "<classic-change-dir>/tasks.md" "<openspec-task-text>"',
+      );
       expect(enDispatch).toContain('fresh background implementer agent for every task');
       expect(enDispatch).toContain('task reviewer, fix agents, and the final reviewer');
+      expect(enDispatch).toContain('Use the agent / Task / multi-agent dispatch mechanism');
+      expect(enDispatch).toContain(
+        'Do not invent a model argument or turn a missing selector into a blocking condition',
+      );
+      expect(enDispatch).not.toContain(
+        'real asynchronous execution, isolated context, result collection',
+      );
+      expect(enDispatch).not.toContain('platform-default');
       expect(enDispatch).toContain(
         'Language: Use the configured Comet artifact language from comet state get <name> language',
       );
@@ -2655,10 +2698,8 @@ describe('skills', () => {
       );
       expect(enDispatch).toContain('Do NOT summarize');
       expect(enDispatch).toContain('irreducible ambiguity');
-      expect(enDispatch).toContain(
-        'Background dispatch capability disappearing during execution is a runtime stop condition',
-      );
-      expect(enDispatch).toContain('Do not create a separate "switch to executing-plans" pause');
+      expect(enDispatch).toContain('A subagent-dispatch failure is a runtime stop condition');
+      expect(enDispatch).toContain('Record the current task as `BLOCKED` with the failure reason');
       expect(enDispatch).toContain('must not load `finishing-a-development-branch`');
       expect(enDispatch).toContain(
         'return control to `comet-build` for exit checks, the phase guard, and phase handoff',
@@ -2879,14 +2920,14 @@ describe('skills', () => {
       );
 
       expect(zh).toContain('Comet Ambient Resume');
-      expect(zh).toContain('node "$COMET_RESUME_PROBE" probe --stdin');
+      expect(zh).toContain('comet resume-probe . --stdin --json');
       expect(zh).toContain('不把无关任务挂到 active Comet change');
       expect(en).toContain('Comet Ambient Resume');
-      expect(en).toContain('node "$COMET_RESUME_PROBE" probe --stdin');
+      expect(en).toContain('comet resume-probe . --stdin --json');
       expect(en).toContain('Never attach unrelated work');
     });
 
-    it('documents the resume probe script in both script references', async () => {
+    it('documents the public resume probe CLI bilingually', async () => {
       const zh = await fs.readFile(
         path.resolve('assets', 'skills-zh', 'comet', 'reference', 'scripts.md'),
         'utf-8',
@@ -2896,10 +2937,25 @@ describe('skills', () => {
         'utf-8',
       );
 
-      expect(zh).toContain('COMET_RESUME_PROBE="$COMET_SCRIPTS_DIR/comet-resume-probe.mjs"');
-      expect(zh).toContain('| `COMET_RESUME_PROBE` |');
-      expect(en).toContain('COMET_RESUME_PROBE="$COMET_SCRIPTS_DIR/comet-resume-probe.mjs"');
-      expect(en).toContain('| `COMET_RESUME_PROBE` |');
+      expect(zh).toContain('comet resume-probe . --stdin --json');
+      expect(zh).not.toContain('<comet-resume-probe-script>');
+      expect(en).toContain('comet resume-probe . --stdin --json');
+      expect(en).not.toContain('<comet-resume-probe-script>');
+    });
+
+    it('uses only the public CLI without platform-directory discovery bilingually', async () => {
+      for (const languageDir of ['skills-zh', 'skills']) {
+        const source = await fs.readFile(
+          path.resolve('assets', languageDir, 'comet', 'reference', 'scripts.md'),
+          'utf-8',
+        );
+
+        expect(source).toContain('comet state select <change-name>');
+        expect(source).not.toContain('Base directory');
+        expect(source).not.toContain('<comet-state-script>');
+        expect(source).not.toContain('"$PWD/../.claude/skills"');
+        expect(source).not.toContain('"$HOME/.claude/skills"');
+      }
     });
 
     it('documents every Classic transition event and the archive boundary bilingually', async () => {
@@ -2941,9 +2997,9 @@ describe('skills', () => {
       );
 
       expect(zh).toContain('comet/reference/scripts.md');
-      expect(zh).toContain('node "$COMET_RESUME_PROBE" probe --stdin');
+      expect(zh).toContain('comet resume-probe . --stdin --json');
       expect(en).toContain('comet/reference/scripts.md');
-      expect(en).toContain('node "$COMET_RESUME_PROBE" probe --stdin');
+      expect(en).toContain('comet resume-probe . --stdin --json');
     });
 
     it('keeps review_mode wired through state and schema scripts', async () => {
@@ -2989,7 +3045,8 @@ describe('skills', () => {
 
           // Skills may either carry the bootstrap inline or delegate it to
           // reference/scripts.md for progressive loading. Inline bootstrap still
-          // needs the safe HOME glob; delegated bootstrap is validated in scripts.md.
+          // needs explicit installed-skill roots; delegated bootstrap is validated
+          // in scripts.md.
           const isMainEntry = skillPath === 'comet/SKILL.md';
           const delegatesBootstrap = content.includes('comet/reference/scripts.md');
           const hasInlineBootstrap = content.includes('node "$COMET_ENV"');
@@ -3005,12 +3062,12 @@ describe('skills', () => {
               );
               expect(
                 content,
-                `${languageDir}/${skillPath} should allow HOME skill glob expansion`,
-              ).toContain('"$HOME"/.*/skills');
+                `${languageDir}/${skillPath} should include the Codex skill root`,
+              ).toContain('"$HOME/.codex/skills"');
               expect(
                 content,
-                `${languageDir}/${skillPath} should not quote the HOME skill glob`,
-              ).not.toContain('"$HOME/.*/skills"');
+                `${languageDir}/${skillPath} should include the Claude workspace skill root`,
+              ).toContain('"$PWD/../.claude/skills"');
             }
           } else {
             expect(
@@ -3253,7 +3310,7 @@ describe('skills', () => {
           max_verify_failures: 5,
           snapshot: {
             include: ['**/*'],
-            exclude: [],
+            exclude: DEFAULT_WORKFLOW_NATIVE_SNAPSHOT_CONFIG.exclude,
             max_files: 10_000,
             max_total_bytes: 256 * 1024 * 1024,
             max_duration_ms: 60_000,
