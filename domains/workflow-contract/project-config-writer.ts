@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'crypto';
 import { promises as fs } from 'fs';
 import path from 'path';
 
-import { atomicWriteContainedText } from './contained-atomic-write.js';
+import { atomicWriteContainedText, publishFileExclusively } from './contained-atomic-write.js';
 import {
   mergeWorkflowProjectConfigDocument,
   parseWorkflowProjectConfigDocument,
@@ -129,7 +129,7 @@ export async function writeWorkflowProjectConfigSource(
       expected: 'file',
     });
     try {
-      await fs.link(temporary, finalInspection.target);
+      await publishFileExclusively(temporary, finalInspection.target);
     } catch (error) {
       throw new Error('Project config final publish failed; successor was preserved', {
         cause: error,
@@ -194,6 +194,7 @@ export async function writeWorkflowProjectConfig(
 ): Promise<void> {
   const snapshot = await readWorkflowProjectConfigSnapshot(projectRoot, {
     allowPartialProject: true,
+    allowMissingNativeFields: true,
   });
   const document = mergeWorkflowProjectConfigDocument(snapshot.document?.value ?? {}, config);
   const language =
