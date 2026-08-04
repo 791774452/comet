@@ -2,6 +2,12 @@
 
 All notable changes to @rpamis/comet will be documented in this file.
 
+## What's Changed [0.4.0-beta.15] - 2026-08-02
+
+### Fixed
+
+- **Eval Dockerfile hash fallback**: `get_dockerfile_hash()` now falls back to `environment/Dockerfile` when a workspace has no root `Dockerfile`, matching the fallback `docker_build()` already applied. Building or naming an image for an eval workspace that keeps its Dockerfile under `environment/` no longer fails before reaching Docker.
+
 ## What's Changed [0.4.0-beta.14] - 2026-08-02
 
 ### Fixed
