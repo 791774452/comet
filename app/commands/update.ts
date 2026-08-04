@@ -15,6 +15,7 @@ import {
 import {
   copyCometSkillsForPlatform,
   copyCometRulesForPlatform,
+  detectInstalledWorkflowSelection,
   installCometHooksForPlatform,
   getManifestSkills,
   mergeProjectConfig,
@@ -1542,9 +1543,24 @@ async function updateSingleProject(
     );
   }
 
-  const targetWorkflowSelections = targets.map((target) =>
-    target.scope === 'global' ? 'classic' : projectWorkflowSelection,
-  );
+  // Global scope mirrors `comet init`: `comet update --scope global` must keep
+  // already-installed Skills in sync without expanding the workflow range the
+  // user chose at install time. The selection is derived from what is on disk
+  // by checking the two workflow markers (see detectInstalledWorkflowSelection
+  // in domains/skill/platform-install.ts). Project scope keeps honoring the
+  // project workflow configuration.
+  const skillWorkflowSelectionFor = async (
+    target: InstalledCometTarget,
+  ): Promise<InitWorkflowSelection> => {
+    if (target.scope !== 'global') return projectWorkflowSelection;
+    const skillsRoot = path.join(
+      getBaseDir('global', projectPath),
+      getPlatformSkillsDir(target.platform, 'global'),
+      'skills',
+    );
+    return detectInstalledWorkflowSelection(skillsRoot);
+  };
+  const targetWorkflowSelections = await Promise.all(targets.map(skillWorkflowSelectionFor));
   const updateSkillPaths = new Set(
     (
       await Promise.all(
@@ -1571,8 +1587,7 @@ async function updateSingleProject(
     const languageSkillsDir = languageToSkillsDir(languageId);
     const targetInstallMode = installModeFor(target);
     const nativeProjectTarget = nativeProject && target.scope === 'project';
-    const targetWorkflowSelection =
-      target.scope === 'global' ? 'classic' : projectWorkflowSelection;
+    const targetSkillWorkflowSelection = await skillWorkflowSelectionFor(target);
     if (target.scope === 'project') {
       await assertClassicProjectMutationAllowed?.();
     }
@@ -1581,7 +1596,7 @@ async function updateSingleProject(
         baseDir,
         target.platform,
         target.scope,
-        targetWorkflowSelection,
+        targetSkillWorkflowSelection,
       );
     }
     const { copied, skipped, failed } = await copyCometSkillsForPlatform(
@@ -1591,7 +1606,7 @@ async function updateSingleProject(
       languageSkillsDir,
       target.scope,
       targetInstallMode,
-      targetWorkflowSelection,
+      targetSkillWorkflowSelection,
     );
     const cleanupResult =
       failed === 0
