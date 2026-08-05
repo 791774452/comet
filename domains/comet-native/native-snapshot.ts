@@ -748,13 +748,26 @@ interface NativeGitSelectionResults {
 
 async function readNativeGitSelectionResults(
   execution: NativeSnapshotExecution,
-  projectRoot: string,
+  paths: NativeProjectPaths,
   limits: NativeGitSelectionLimits,
   hooks: Pick<
     NativeGitSelectionHooks,
     'afterStageBefore' | 'afterCombined' | 'outputChunkBytes'
   > = {},
 ): Promise<NativeGitSelectionResults> {
+  const projectRoot = path.resolve(paths.projectRoot);
+  const selectionFile = path.join(projectRoot, '.comet', 'current-change.json');
+  const excludedRefs = [paths.nativeRoot, paths.configFile, selectionFile].map((target) => {
+    const relative = path.relative(projectRoot, path.resolve(target)).replaceAll('\\', '/');
+    const safe = safeGitProjectPath(relative);
+    if (safe === null) throw new Error('Native Git snapshot exclusion escaped the project root');
+    return safe;
+  });
+  const pathspecs = [
+    '--',
+    '.',
+    ...excludedRefs.flatMap((relative) => [`:(exclude)${relative}`, `:(exclude)${relative}/**`]),
+  ];
   const options: GitNullRecordOptions = {
     ...limits,
     ...(hooks.outputChunkBytes === undefined ? {} : { outputChunkBytes: hooks.outputChunkBytes }),
@@ -762,21 +775,21 @@ async function readNativeGitSelectionResults(
   const stagedBefore = await runGitNullRecords(
     execution,
     projectRoot,
-    ['ls-files', '--stage', '-z'],
+    ['ls-files', '--stage', '-z', ...pathspecs],
     options,
   );
   await hooks.afterStageBefore?.();
   const combined = await runGitNullRecords(
     execution,
     projectRoot,
-    ['ls-files', '--cached', '--others', '--exclude-standard', '-z'],
+    ['ls-files', '--cached', '--others', '--exclude-standard', '-z', ...pathspecs],
     options,
   );
   await hooks.afterCombined?.();
   const stagedAfter = await runGitNullRecords(
     execution,
     projectRoot,
-    ['ls-files', '--stage', '-z'],
+    ['ls-files', '--stage', '-z', ...pathspecs],
     options,
   );
   return { stagedBefore, combined, stagedAfter };
@@ -792,10 +805,11 @@ function gitSelectionFence(results: NativeGitSelectionResults): NativeGitSelecti
 
 async function nativeGitSnapshotSelection(
   execution: NativeSnapshotExecution,
-  projectRoot: string,
+  paths: NativeProjectPaths,
   limits: NativeGitSelectionLimits = DEFAULT_NATIVE_GIT_SELECTION_LIMITS,
   hooks: NativeGitSelectionHooks = {},
 ): Promise<NativeGitSnapshotSelection | null> {
+  const projectRoot = path.resolve(paths.projectRoot);
   if (!(await hasGitMetadataBoundary(projectRoot))) return null;
   let insideWorktree: Buffer;
   try {
@@ -814,7 +828,7 @@ async function nativeGitSnapshotSelection(
   }
   let results: NativeGitSelectionResults;
   try {
-    results = await readNativeGitSelectionResults(execution, projectRoot, limits, hooks);
+    results = await readNativeGitSelectionResults(execution, paths, limits, hooks);
   } catch (error) {
     if (isNativeGitSnapshotTimeout(error)) throw error;
     throw new Error('Native Git snapshot provider failed after repository detection', {
@@ -905,14 +919,14 @@ function gitSelectionChanged(
 
 async function finalizeNativeGitSnapshotSelection(
   execution: NativeSnapshotExecution,
-  projectRoot: string,
+  paths: NativeProjectPaths,
   limits: NativeGitSelectionLimits,
   selection: NativeGitSnapshotSelection,
   outputChunkBytes?: number,
 ): Promise<void> {
   let finalResults: NativeGitSelectionResults;
   try {
-    finalResults = await readNativeGitSelectionResults(execution, projectRoot, limits, {
+    finalResults = await readNativeGitSelectionResults(execution, paths, limits, {
       ...(outputChunkBytes === undefined ? {} : { outputChunkBytes }),
     });
   } catch (error) {
@@ -2155,7 +2169,7 @@ export async function filterNativeContentSnapshotToProjectScope(
   const gitSelectionLimits = resolveNativeGitSelectionLimits(options.gitSelectionLimits);
   const selection = await nativeGitSnapshotSelection(
     execution,
-    projectRoot,
+    paths,
     gitSelectionLimits,
     options.gitSelectionHooks,
   );
@@ -2193,7 +2207,7 @@ export async function filterNativeContentSnapshotToProjectScope(
 
   await finalizeNativeGitSnapshotSelection(
     execution,
-    projectRoot,
+    paths,
     gitSelectionLimits,
     selection,
     options.gitSelectionHooks?.outputChunkBytes,
@@ -2737,7 +2751,7 @@ export async function createNativeContentSnapshot(
 
   const gitSelection = await nativeGitSnapshotSelection(
     execution,
-    projectRoot,
+    paths,
     gitSelectionLimits,
     options.gitSelectionHooks,
   );
@@ -2830,13 +2844,46 @@ export async function createNativeContentSnapshot(
       }
       incrementalEnabled = baselineByPath.size > 0;
     }
+    // `git ls-files --modified` intentionally trusts assume-unchanged and
+    // skip-worktree index flags. Those paths can have different bytes on disk
+    // while Git reports a clean working tree, so their object ids cannot prove
+    // that a raw-content snapshot entry is reusable.
+    const unsafeGitObjectIdPaths = new Set<string>();
+    let gitObjectIdsTrusted = true;
+    try {
+      const tagged = await runGitNullRecords(execution, projectRoot, ['ls-files', '-v', '-z'], {
+        ...gitSelectionLimits,
+        ...(options.gitSelectionHooks?.outputChunkBytes === undefined
+          ? {}
+          : { outputChunkBytes: options.gitSelectionHooks.outputChunkBytes }),
+      });
+      if (tagged.overflow) {
+        incrementalEnabled = false;
+        gitObjectIdsTrusted = false;
+        baselineByPath.clear();
+      } else {
+        for (const encoded of tagged.records) {
+          const record = decodeGitRecord(encoded);
+          const separator = record.indexOf(' ');
+          const relative = separator < 0 ? null : safeGitProjectPath(record.slice(separator + 1));
+          if (separator !== 1 || relative === null) {
+            throw new Error('Native Git snapshot provider returned a malformed tagged record');
+          }
+          if (record[0] !== 'H') unsafeGitObjectIdPaths.add(relative);
+        }
+      }
+    } catch (error) {
+      if (isNativeGitSnapshotTimeout(error)) throw error;
+      incrementalEnabled = false;
+      gitObjectIdsTrusted = false;
+      baselineByPath.clear();
+    }
     // Detect files modified in the working tree but not yet staged. Git index
     // object ids do not reflect unstaged edits, so such files must be
     // re-captured even when their staged object id matches baseline. This
     // probe also protects newly-created baselines from binding a working-tree
     // hash to an unrelated index object id.
     const workingTreeModified = new Set<string>();
-    let gitObjectIdsTrusted = true;
     try {
       const modifiedOutput = await runGitBoundedOutput(
         execution,
@@ -2978,6 +3025,7 @@ export async function createNativeContentSnapshot(
         incrementalEnabled &&
         baselineEntry?.gitObjectId !== undefined &&
         baselineEntry.gitObjectId === currentObjectId &&
+        !unsafeGitObjectIdPaths.has(relative) &&
         !workingTreeModified.has(relative)
       ) {
         if (entries.length >= limits.maxFiles) {
@@ -3001,7 +3049,11 @@ export async function createNativeContentSnapshot(
         continue;
       }
       const boundObjectId =
-        gitObjectIdsTrusted && !workingTreeModified.has(relative) ? currentObjectId : undefined;
+        gitObjectIdsTrusted &&
+        !unsafeGitObjectIdPaths.has(relative) &&
+        !workingTreeModified.has(relative)
+          ? currentObjectId
+          : undefined;
       await captureFile(target, relative, before, boundObjectId);
       if (boundObjectId !== undefined) boundObjectIdPaths.add(relative);
     }
@@ -3009,7 +3061,7 @@ export async function createNativeContentSnapshot(
     await options.gitSelectionHooks?.afterContentRevalidation?.();
     await finalizeNativeGitSnapshotSelection(
       execution,
-      projectRoot,
+      paths,
       gitSelectionLimits,
       gitSelection,
       options.gitSelectionHooks?.outputChunkBytes,

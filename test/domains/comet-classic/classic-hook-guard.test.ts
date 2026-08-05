@@ -2,7 +2,7 @@ import { spawnSync } from 'child_process';
 import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readRunState } from '../../../domains/engine/state.js';
 import { inspectClassicHookGuard } from '../../../domains/comet-classic/classic-hook-guard.js';
 
@@ -86,9 +86,10 @@ async function seedChange(
   phase: 'open' | 'design' | 'build' | 'verify' | 'archive',
   options: {
     archived?: boolean;
-    workflow?: 'full' | 'hotfix';
+    workflow?: 'full' | 'hotfix' | 'tweak';
     designDoc?: string | null;
     plan?: string | null;
+    createPlanFile?: boolean;
     verificationReport?: string | null;
     isolation?: string;
     boundBranch?: string;
@@ -121,10 +122,71 @@ async function seedChange(
   if (options.boundBranch) lines.push(`bound_branch: ${options.boundBranch}`);
   lines.push('');
   await fs.writeFile(path.join(changeDir, '.comet.yaml'), lines.join('\n'));
+  if (options.plan && options.createPlanFile !== false) {
+    const planFile = path.join(dir, ...options.plan.split('/'));
+    await fs.mkdir(path.dirname(planFile), { recursive: true });
+    await fs.writeFile(planFile, '- [ ] implementation task\n');
+  }
   return changeDir;
 }
 
 describe('Classic hook guard command', () => {
+  it('allows an explicitly external target during a guarded Classic phase', async () => {
+    const dir = await makeProject();
+    await seedChange(dir, 'demo', 'design');
+    const externalTarget = path.join(os.tmpdir(), `comet-memory-${path.basename(dir)}.md`);
+
+    const result = await inspectClassicHookGuard(dir, 'demo', {
+      intent: 'write',
+      targets: [externalTarget],
+      toolName: 'Write',
+    });
+
+    expect(result).toMatchObject({
+      allowed: true,
+      workflow: 'classic',
+      change: 'demo',
+      phase: 'design',
+    });
+  });
+
+  it('stays neutral when a write target cannot be attributed during Classic design', async () => {
+    const dir = await makeProject();
+    await seedChange(dir, 'demo', 'design');
+
+    const result = await inspectClassicHookGuard(dir, 'demo', {
+      intent: 'unknown',
+      targets: [],
+      toolName: 'FutureWriteTool',
+    });
+
+    expect(result).toMatchObject({
+      allowed: true,
+      workflow: 'classic',
+      change: 'demo',
+      phase: 'design',
+    });
+  });
+
+  it('blocks an explicit target when its project scope cannot be determined', async () => {
+    const dir = await makeProject();
+    await seedChange(dir, 'demo', 'design');
+
+    const result = await inspectClassicHookGuard(
+      dir,
+      'demo',
+      { intent: 'write', targets: [path.join(dir, 'src', 'app.ts')], toolName: 'Write' },
+      {
+        scopeTargets: vi.fn(async () => {
+          throw new Error('project root is unreadable');
+        }),
+      },
+    );
+
+    expect(result).toMatchObject({ allowed: false, workflow: 'classic', change: 'demo' });
+    expect(result.reason).toContain('scope could not be determined safely');
+  });
+
   it('blocks a selected active change junction without reading external state', async () => {
     const dir = await makeProject();
     const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'classic-hook-outside-'));
@@ -463,7 +525,9 @@ describe('Classic hook guard command', () => {
     'allows selected build source writes while another change is in %s',
     async (phase) => {
       const dir = await makeProject();
-      await seedChange(dir, 'build-ready', 'build');
+      await seedChange(dir, 'build-ready', 'build', {
+        plan: 'docs/superpowers/plans/build-ready.md',
+      });
       await seedChange(dir, 'unrelated-change', phase);
       expect(run(dir, 'state', ['select', 'build-ready']).status).toBe(0);
 
@@ -476,7 +540,9 @@ describe('Classic hook guard command', () => {
 
   it('blocks source writes for the selected open change even when another change can build', async () => {
     const dir = await makeProject();
-    await seedChange(dir, 'build-ready', 'build');
+    await seedChange(dir, 'build-ready', 'build', {
+      plan: 'docs/superpowers/plans/build-ready.md',
+    });
     await seedChange(dir, 'open-change', 'open');
     expect(run(dir, 'state', ['select', 'open-change']).status).toBe(0);
 
@@ -498,7 +564,9 @@ describe('Classic hook guard command', () => {
 
   it('ignores archived changes when deciding whether selection is required', async () => {
     const dir = await makeProject();
-    await seedChange(dir, 'build-ready', 'build');
+    await seedChange(dir, 'build-ready', 'build', {
+      plan: 'docs/superpowers/plans/build-ready.md',
+    });
     await seedChange(dir, 'archived-change', 'archive', { archived: true });
 
     const result = run(dir, 'hook-guard', [], hookInput(path.join(dir, 'src', 'feature.ts')));
@@ -560,6 +628,134 @@ describe('Classic hook guard command', () => {
     expect(result.status).toBe(2);
     expect(result.stderr).toContain('design_doc is empty');
   });
+
+  it.each(['Write', 'Edit'])(
+    'blocks %s source operations until a full build plan is recorded',
+    async (toolName) => {
+      const dir = await makeProject();
+      await seedChange(dir, 'missing-plan', 'build');
+      expect(run(dir, 'state', ['select', 'missing-plan']).status).toBe(0);
+      const target = path.join(dir, 'src', 'feature.ts');
+
+      const decision = await inspectClassicHookGuard(dir, 'missing-plan', {
+        intent: 'write',
+        targets: [target],
+        toolName,
+      });
+
+      expect(decision.allowed).toBe(false);
+      expect(decision.reason).toContain('ERROR_CODE: classic-build-plan-missing');
+      expect(decision.reason).toContain('CHANGE: missing-plan');
+      expect(decision.reason).toContain('TARGET: src/feature.ts');
+      expect(decision.reason).toContain(
+        'comet state set missing-plan plan <repository-relative-plan-path>',
+      );
+      expect(decision.reason).toContain('comet state check missing-plan build --recover');
+      expect(decision.reason).toContain('SUCCESS:');
+      expect(decision.reason).toContain('RETRY:');
+      expect(decision.reason).toContain('PROHIBITED:');
+    },
+  );
+
+  it('reports a recorded but missing full build plan as broken', async () => {
+    const dir = await makeProject();
+    const recordedPlan = 'docs/superpowers/plans/missing-plan.md';
+    await seedChange(dir, 'broken-plan', 'build', {
+      plan: recordedPlan,
+      createPlanFile: false,
+    });
+    expect(run(dir, 'state', ['select', 'broken-plan']).status).toBe(0);
+
+    const decision = await inspectClassicHookGuard(dir, 'broken-plan', {
+      intent: 'write',
+      targets: [path.join(dir, 'src', 'feature.ts')],
+      toolName: 'Write',
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toContain('ERROR_CODE: classic-build-plan-broken');
+    expect(decision.reason).toContain(`RECORDED_PLAN: ${recordedPlan}`);
+    expect(decision.reason).toContain(
+      'comet state set broken-plan plan <new-repository-relative-plan-path>',
+    );
+  });
+
+  it('does not accept an existing source file as a full build plan', async () => {
+    const dir = await makeProject();
+    await fs.mkdir(path.join(dir, 'src'), { recursive: true });
+    await fs.writeFile(path.join(dir, 'src', 'existing.ts'), 'export {}\n');
+    await seedChange(dir, 'invalid-plan', 'build', { plan: 'src/existing.ts' });
+
+    const decision = await inspectClassicHookGuard(dir, 'invalid-plan', {
+      intent: 'write',
+      targets: [path.join(dir, 'src', 'feature.ts')],
+      toolName: 'Write',
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toContain('ERROR_CODE: classic-build-plan-broken');
+  });
+
+  it('allows a replacement plan file when the recorded plan is broken', async () => {
+    const dir = await makeProject();
+    await seedChange(dir, 'replace-plan', 'build', {
+      plan: 'docs/superpowers/plans/missing-plan.md',
+      createPlanFile: false,
+    });
+
+    const decision = await inspectClassicHookGuard(dir, 'replace-plan', {
+      intent: 'write',
+      targets: [path.join(dir, 'docs', 'superpowers', 'plans', 'replace-plan.md')],
+      toolName: 'Write',
+    });
+
+    expect(decision.allowed).toBe(true);
+  });
+
+  it('resolves relative hook targets from the explicit project root', async () => {
+    const dir = await makeProject();
+    await seedChange(dir, 'relative-target', 'design');
+
+    const decision = await inspectClassicHookGuard(dir, 'relative-target', {
+      intent: 'write',
+      targets: ['src/feature.ts'],
+      toolName: 'Write',
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toContain('Target file: src/feature.ts');
+  });
+
+  it('fails closed for source writes when a build state has unknown fields', async () => {
+    const dir = await makeProject();
+    const changeDir = await seedChange(dir, 'invalid-build', 'build');
+    await fs.appendFile(path.join(changeDir, '.comet.yaml'), 'unknown_root_field: true\n');
+
+    const decision = await inspectClassicHookGuard(dir, 'invalid-build', {
+      intent: 'write',
+      targets: [path.join(dir, 'src', 'feature.ts')],
+      toolName: 'Write',
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toContain('active Classic state is invalid');
+  });
+
+  it.each(['hotfix', 'tweak'] as const)(
+    'keeps %s build source writes independent from a Superpowers plan',
+    async (workflow) => {
+      const dir = await makeProject();
+      await seedChange(dir, `${workflow}-change`, 'build', { workflow, designDoc: null });
+
+      const decision = await inspectClassicHookGuard(dir, `${workflow}-change`, {
+        intent: 'write',
+        targets: [path.join(dir, 'src', 'feature.ts')],
+        toolName: 'Write',
+      });
+
+      expect(decision.allowed).toBe(true);
+    },
+  );
 
   it('selects, reads, and clears the current change through the state launcher', async () => {
     const dir = await makeProject();

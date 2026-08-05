@@ -1023,6 +1023,13 @@ async function installCometHooksForPlatform(
     };
   }
 
+  if (scope === 'global') {
+    return {
+      status: 'skipped',
+      reason: 'blocking Hooks are project-scoped',
+    };
+  }
+
   try {
     const manifest = await readManifest();
     const hooksConfig = managedHooksForSelection(manifest, workflowSelection);
@@ -1060,7 +1067,7 @@ async function installCometHooksForPlatform(
           }
           if (failedLegacyFiles.length > 0) {
             return {
-              status: 'installed',
+              status: 'failed',
               reason: `legacy Hook cleanup failed for ${failedLegacyFiles.join(', ')}`,
               cleanupFailed: failedLegacyFiles.length,
             };
@@ -1205,46 +1212,72 @@ function isManagedHookCommand(command: unknown, scriptRelPaths: string[]): boole
   );
 }
 
+const COPILOT_COMMAND_FIELDS = ['command', 'bash', 'powershell'] as const;
+
+interface ManagedCopilotHookCleanup {
+  entries: unknown[];
+  removed: number;
+  detachedMetadata: Array<Record<string, unknown>>;
+}
+
+/** Remove Comet-owned command fields without discarding unrelated Copilot metadata. */
+function removeManagedCopilotHookEntries(
+  entries: unknown[],
+  scriptRelPaths: string[],
+): ManagedCopilotHookCleanup {
+  let removed = 0;
+  const detachedMetadata: Array<Record<string, unknown>> = [];
+  const cleaned = entries.flatMap((entry) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return [entry];
+
+    const record = { ...(entry as Record<string, unknown>) };
+    let changed = false;
+    for (const field of COPILOT_COMMAND_FIELDS) {
+      if (isManagedHookCommand(record[field], scriptRelPaths)) {
+        delete record[field];
+        changed = true;
+      }
+    }
+    if (!changed) return [entry];
+
+    removed++;
+    const hasCommand = COPILOT_COMMAND_FIELDS.some((field) => typeof record[field] === 'string');
+    if (!hasCommand) {
+      for (const field of COPILOT_COMMAND_FIELDS) delete record[field];
+      if (Object.keys(record).length > 0) detachedMetadata.push(record);
+      return [];
+    }
+    return [record];
+  });
+
+  return { entries: cleaned, removed, detachedMetadata };
+}
+
 function mergeHookGroups<T extends { command: string }>(
   existingGroups: unknown[],
   newGroups: Array<{ matcher: string; hooks: T[] }>,
   scriptRelPaths: string[],
 ): unknown[] {
-  const mergedGroups = existingGroups.map((group) => {
-    if (!group || typeof group !== 'object' || Array.isArray(group)) return group;
+  const mergedGroups = existingGroups.flatMap((group) => {
+    if (!group || typeof group !== 'object' || Array.isArray(group)) return [group];
     const record = group as Record<string, unknown>;
-    if (!Array.isArray(record.hooks)) return record;
+    if (!Array.isArray(record.hooks)) return [record];
 
     const hooks = record.hooks.filter((hook) => {
       const command =
         hook && typeof hook === 'object' ? (hook as Record<string, unknown>).command : undefined;
       return !isManagedHookCommand(command, scriptRelPaths);
     });
+    const removedManagedHook = hooks.length !== record.hooks.length;
+    const isPlainManagedGroup = Object.keys(record).every(
+      (key) => key === 'matcher' || key === 'hooks',
+    );
+    if (removedManagedHook && hooks.length === 0 && isPlainManagedGroup) return [];
 
-    return { ...record, hooks };
+    return [{ ...record, hooks }];
   });
 
-  for (const newGroup of newGroups) {
-    const existingGroupIndex = mergedGroups.findIndex(
-      (group) =>
-        Boolean(group) &&
-        typeof group === 'object' &&
-        !Array.isArray(group) &&
-        (group as Record<string, unknown>).matcher === newGroup.matcher &&
-        Array.isArray((group as Record<string, unknown>).hooks),
-    );
-    if (existingGroupIndex >= 0) {
-      const existingGroup = mergedGroups[existingGroupIndex] as Record<string, unknown>;
-      mergedGroups[existingGroupIndex] = {
-        ...existingGroup,
-        hooks: [...(existingGroup.hooks as unknown[]), ...newGroup.hooks],
-      };
-    } else {
-      mergedGroups.push(newGroup);
-    }
-  }
-
-  return mergedGroups;
+  return [...mergedGroups, ...newGroups];
 }
 
 /**
@@ -1534,15 +1567,32 @@ async function installCopilotHooks(
     scriptEntries.push({ matcher, bash: cmd, powershell: cmd });
   }
 
-  const hookConfig = {
-    version: 1,
-    hooks: {
-      preToolUse: scriptEntries,
-    },
+  const settings = await readSettingsJsonObject(hookFilePath, 'GitHub Copilot');
+  const existingHooks =
+    settings.hooks && typeof settings.hooks === 'object' && !Array.isArray(settings.hooks)
+      ? (settings.hooks as Record<string, unknown>)
+      : {};
+  const existingPreToolUse = asHookGroup(existingHooks.preToolUse);
+  const cleaned = removeManagedCopilotHookEntries(
+    existingPreToolUse,
+    managedHookScriptPaths(hooksConfig),
+  );
+  const detachedMetadata = Object.assign(
+    {},
+    ...cleaned.detachedMetadata.map(({ matcher: _matcher, ...metadata }) => metadata),
+  );
+  if (settings.version === undefined) settings.version = 1;
+  settings.hooks = {
+    ...existingHooks,
+    preToolUse: [
+      ...cleaned.entries,
+      ...scriptEntries.map((entry, index) =>
+        index === 0 ? { ...detachedMetadata, ...entry } : entry,
+      ),
+    ],
   };
-
   await ensureDir(hooksDir);
-  await writeFile(hookFilePath, JSON.stringify(hookConfig, null, 2) + '\n', 'utf-8');
+  await writeFile(hookFilePath, JSON.stringify(settings, null, 2) + '\n', 'utf-8');
   return { status: 'installed' };
 }
 
@@ -1558,10 +1608,31 @@ async function installKiroHooks(
   context: HookCommandContext,
 ): Promise<HookInstallResult> {
   const hooksDir = path.join(platformBase, 'hooks');
+  const managedScriptPaths = managedHookScriptPaths(hooksConfig);
 
   for (const [scriptRelPath, config] of Object.entries(hooksConfig)) {
     const hookFileName = path.basename(scriptRelPath).replace(/\.mjs$/, '.kiro.hook');
     const hookFilePath = path.join(hooksDir, hookFileName);
+    const existing = await readJsonObjectFile(hookFilePath);
+    if (existing.status === 'error') {
+      return {
+        status: 'failed',
+        reason: `invalid or unreadable Kiro Hook at ${hookFilePath}: ${existing.error.message}`,
+      };
+    }
+    if (existing.status === 'present') {
+      const then = existing.value.then;
+      const command =
+        then && typeof then === 'object' && !Array.isArray(then)
+          ? (then as Record<string, unknown>).command
+          : undefined;
+      if (!isManagedHookCommand(command, managedScriptPaths)) {
+        return {
+          status: 'failed',
+          reason: `refusing to overwrite user-owned Kiro Hook at ${hookFilePath}`,
+        };
+      }
+    }
 
     // Map Write|Edit matcher to Kiro's write tool category
     const toolName = config.matcher === 'Write|Edit' ? 'write' : '*';
@@ -1585,12 +1656,36 @@ async function installKiroHooks(
     await writeFile(hookFilePath, JSON.stringify(hookConfig, null, 2) + '\n', 'utf-8');
   }
 
+  const failedLegacyFiles: string[] = [];
   for (const legacyScript of LEGACY_HOOK_SCRIPTS) {
     const legacyFile = path.join(
       hooksDir,
       path.basename(legacyScript).replace(/\.mjs$/u, '.kiro.hook'),
     );
-    await rm(legacyFile, { force: true });
+    const existing = await readJsonObjectFile(legacyFile);
+    if (existing.status === 'error') {
+      failedLegacyFiles.push(path.basename(legacyFile));
+      continue;
+    }
+    if (existing.status === 'missing') continue;
+    const then = existing.value.then;
+    const command =
+      then && typeof then === 'object' && !Array.isArray(then)
+        ? (then as Record<string, unknown>).command
+        : undefined;
+    if (!isManagedHookCommand(command, managedScriptPaths)) continue;
+    try {
+      await rm(legacyFile);
+    } catch {
+      failedLegacyFiles.push(path.basename(legacyFile));
+    }
+  }
+  if (failedLegacyFiles.length > 0) {
+    return {
+      status: 'failed',
+      reason: `legacy Hook cleanup failed for ${failedLegacyFiles.join(', ')}`,
+      cleanupFailed: failedLegacyFiles.length,
+    };
   }
 
   return { status: 'installed' };
@@ -1927,6 +2022,7 @@ export {
   computeRuleDestPath,
   formatRuleContent,
   isManagedHookCommand,
+  removeManagedCopilotHookEntries,
   buildHookCommand,
   removeManagedHooksFromJsonFile,
   planSkillDirectoryCopy,

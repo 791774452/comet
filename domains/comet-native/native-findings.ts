@@ -76,6 +76,12 @@ const EXACT_METADATA: Record<string, FindingMetadata> = {
     retry: 'next',
     repair: 'none',
   },
+  'verification-implementation-stale': {
+    severity: 'error',
+    requiredAction: 'return-to-build-and-refresh-implementation-scope',
+    retry: 'next',
+    repair: 'none',
+  },
   'verification-receipt-binding-mismatch': {
     severity: 'error',
     requiredAction: 'refresh-verification-receipts',
@@ -129,6 +135,36 @@ const EXACT_METADATA: Record<string, FindingMetadata> = {
     requiredAction: 'migrate-workspace-identity',
     retry: 'status',
     repair: 'doctor',
+  },
+  'workspace-binding-root-changed': {
+    severity: 'error',
+    requiredAction: 'return-to-bound-working-directory',
+    retry: 'status',
+    repair: 'none',
+  },
+  'workspace-binding-invalid': {
+    severity: 'error',
+    requiredAction: 'repair-workspace-binding',
+    retry: 'status',
+    repair: 'none',
+  },
+  'workspace-branch-changed': {
+    severity: 'error',
+    requiredAction: 'return-to-bound-working-directory',
+    retry: 'status',
+    repair: 'none',
+  },
+  'workspace-kind-changed': {
+    severity: 'error',
+    requiredAction: 'return-to-bound-working-directory',
+    retry: 'status',
+    repair: 'none',
+  },
+  'workspace-vcs-unavailable': {
+    severity: 'error',
+    requiredAction: 'return-to-bound-working-directory',
+    retry: 'status',
+    repair: 'none',
   },
   'repair-stagnation-warning': {
     severity: 'warning',

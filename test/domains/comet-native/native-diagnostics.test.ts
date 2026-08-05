@@ -104,6 +104,34 @@ describe('Native status diagnostics', () => {
     });
   });
 
+  it('blocks status when a workspace binding cannot be parsed safely', async () => {
+    const state = await createNativeChange({
+      paths,
+      name: 'invalid-workspace',
+      language: 'en',
+      workspaceBinding: { isolation: 'current', changeBranch: null, targetBranch: null },
+    });
+    await fs.writeFile(
+      path.join(nativeChangeDir(paths, state.name), 'runtime', 'workspace.json'),
+      '{"schema":"comet.native.workspace.v3","isolation":"invalid"}\n',
+    );
+
+    await expect(inspectNativeStatus(paths, state.name)).resolves.toMatchObject({
+      name: state.name,
+      phase: 'shape',
+      nextCommand: null,
+      findingSummary: {
+        errors: expect.any(Number),
+        codes: expect.arrayContaining(['workspace-binding-invalid']),
+      },
+      continuation: {
+        disposition: 'blocked',
+        action: 'none',
+        requiredInputs: expect.arrayContaining(['repair-workspace-binding']),
+      },
+    });
+  });
+
   it('does not route an Archive binding failure to receipt refresh', () => {
     const continuation = nativeContinuation({
       state: {
@@ -272,6 +300,14 @@ describe('Native status diagnostics', () => {
     ).rejects.toThrow(/cursor (?:is stale|integrity check failed)/u);
   });
 
+  it('does not hide a malformed current selection as an unselected status list', async () => {
+    await validChange('healthy-change');
+    await fs.mkdir(path.join(projectRoot, '.comet'), { recursive: true });
+    await fs.writeFile(path.join(projectRoot, '.comet', 'current-change.json'), '{broken');
+
+    await expect(listNativeStatusPage(paths)).rejects.toThrow();
+  });
+
   it('reports malformed change YAML without hiding the other changes', async () => {
     await validChange('healthy-change');
     const broken = path.join(paths.changesDir, 'broken-change');
@@ -285,6 +321,19 @@ describe('Native status diagnostics', () => {
       nextCommand: null,
       archiveReady: false,
     });
+  });
+
+  it('keeps large status pages free of synthetic conflict-inspection failures', async () => {
+    for (let index = 0; index < 33; index += 1) {
+      await validChange(`large-change-${String(index).padStart(2, '0')}`);
+    }
+
+    const first = await listNativeStatusPage(paths);
+
+    expect(first.items).toHaveLength(NATIVE_STATUS_PAGE_LIMITS.maxItems);
+    expect(first.items.flatMap((item) => item.findingSummary.codes)).not.toContain(
+      'native-conflict-inspection-invalid',
+    );
   });
 
   it('only marks Archive ready after brief, spec, and verification checks pass', async () => {

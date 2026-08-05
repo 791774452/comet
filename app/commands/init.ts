@@ -25,12 +25,14 @@ import type { InstallMode } from '../../platform/install/types.js';
 import {
   copyCometSkillsForPlatform,
   copyCometRulesForPlatform,
-  installCometHooksForPlatform,
   createWorkingDirs,
-  mergeProjectConfig,
   prepareNativeSkillInstallTarget,
 } from '../../domains/skill/platform-install.js';
-import { installCometProjectInstructions } from '../../domains/skill/project-instructions.js';
+import {
+  reconcileCometHooksForPlatform,
+  reconcileProjectCometHooksForPlatform,
+} from '../../domains/skill/hook-lifecycle.js';
+import { syncCometProjectInstructions } from '../../domains/skill/project-instructions.js';
 import { LANGUAGES, type LanguageConfig } from '../../domains/skill/languages.js';
 import { resolveInitWorkflow } from '../../domains/comet-entry/init-workflow.js';
 import type { CometWorkflow, InitWorkflowSelection } from '../../domains/comet-entry/types.js';
@@ -59,7 +61,14 @@ import {
   readWorkflowProjectConfigSnapshot,
 } from '../../domains/workflow-contract/project-config-reader.js';
 import { writeWorkflowProjectConfig } from '../../domains/workflow-contract/project-config-writer.js';
-import type { WorkflowProjectConfig } from '../../domains/workflow-contract/types.js';
+import {
+  readWorkflowGlobalConfig,
+  writeWorkflowGlobalConfig,
+} from '../../domains/workflow-contract/global-config.js';
+import type {
+  WorkflowGlobalConfig,
+  WorkflowProjectConfig,
+} from '../../domains/workflow-contract/types.js';
 import { installSuperpowersForPlatforms } from '../../domains/integrations/superpowers.js';
 import {
   hasCodegraphProjectIndex,
@@ -502,9 +511,6 @@ export async function initCommand(
 
   const detected = await detectPlatforms(projectPath);
   const scope = await selectScope(options, lang);
-  if (scope === 'global' && options.artifactRoot !== undefined) {
-    throw new Error('--root is only valid for project-scope initialization');
-  }
   if (scope === 'global' && options.codegraph === 'init') {
     throw new Error('--codegraph init is only valid for project-scope initialization');
   }
@@ -535,8 +541,15 @@ export async function initCommand(
     configuredWorkflows.includes('native') &&
     configuredWorkflows.includes('classic')
       ? 'both'
-      : (suggestedWorkflowDecision?.workflow ?? 'classic');
+      : (suggestedWorkflowDecision?.workflow ?? 'native');
   const workflowSelection = await selectWorkflow(options, lang, suggestedWorkflowSelection);
+  if (
+    scope === 'global' &&
+    options.artifactRoot !== undefined &&
+    !includesWorkflow(workflowSelection, 'native')
+  ) {
+    throw new Error('--root is only valid when the Native workflow is enabled');
+  }
   const workflow: CometWorkflow = workflowSelection === 'both' ? 'native' : workflowSelection;
   const workflowDecision =
     scope === 'project'
@@ -918,7 +931,11 @@ export async function initCommand(
           status,
           reason,
           cleanupFailed = 0,
-        } = await installCometHooksForPlatform(baseDir, platform, scope, workflowSelection);
+        } = scope === 'project'
+          ? await reconcileProjectCometHooksForPlatform(baseDir, platform, workflowSelection, {
+              globalBaseDir: os.homedir(),
+            })
+          : await reconcileCometHooksForPlatform(baseDir, platform, scope, workflowSelection);
         cometComponentInstalled ||= status === 'installed';
         if (status === 'installed') {
           if (scope === 'project') projectRouterInstalled = true;
@@ -1068,6 +1085,10 @@ export async function initCommand(
   const cometInstallComplete =
     results.length > 0 && results.every((result) => result.comet !== 'failed');
   const projectInitializationComplete = cometInstallComplete && classicOpenSpecRootReady;
+  const globalWorkflowConfigReady =
+    scope !== 'global' ||
+    !includesWorkflow(workflowSelection, 'classic') ||
+    osGlobalStatus === 'installed';
 
   if (
     scope === 'project' &&
@@ -1097,9 +1118,12 @@ export async function initCommand(
       }
       workingDirsCreated = true;
 
-      if (includesWorkflow(workflowSelection, 'native')) {
-        await installCometProjectInstructions(projectPath, language.id);
-      }
+      await syncCometProjectInstructions(
+        projectPath,
+        language.id,
+        includesWorkflow(workflowSelection, 'native') &&
+          (initialProjectConfigDocument?.ambient_resume ?? true),
+      );
 
       const successfulCometPlatforms = new Set(
         results
@@ -1215,8 +1239,33 @@ export async function initCommand(
         projectConfigCreated = initialProjectConfigDocument === null;
         projectConfigUpdated = initialProjectConfigDocument !== null;
       }
-    } else if (scope === 'global') {
-      await mergeProjectConfig(baseDir, language.artifactLanguage);
+    } else if (scope === 'global' && globalWorkflowConfigReady) {
+      const defaults = defaultProjectConfig(
+        options.artifactRoot ?? 'docs',
+        language.artifactLanguage,
+      );
+      const existingGlobalConfig = await readWorkflowGlobalConfig(baseDir);
+      const selectedWorkflows =
+        workflowSelection === 'both' ? (['native', 'classic'] as const) : [workflowSelection];
+      const config: WorkflowGlobalConfig = {
+        schema: 'comet.global.v1',
+        default_workflow: workflow,
+        workflows: [...selectedWorkflows],
+        ambient_resume: existingGlobalConfig?.ambient_resume ?? true,
+        ...(includesWorkflow(workflowSelection, 'native') ? { native: defaults.native } : {}),
+        ...(includesWorkflow(workflowSelection, 'classic')
+          ? {
+              classic: {
+                artifact_layout: 'docs',
+                language: language.artifactLanguage,
+                context_compression: 'off',
+                review_mode: 'standard',
+                auto_transition: true,
+              },
+            }
+          : {}),
+      };
+      await writeWorkflowGlobalConfig(baseDir, config);
     }
   } catch (error) {
     finalizationFailure = (error as Error).message;

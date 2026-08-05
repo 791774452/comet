@@ -3,7 +3,11 @@ import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { inspectGitWorktree } from '../../platform/paths/git-worktree.js';
+import {
+  inspectGitWorktree,
+  isLocalGitBranch,
+  listGitWorktreeRoots,
+} from '../../platform/paths/git-worktree.js';
 
 describe('Git worktree inspection', () => {
   let primary: string;
@@ -41,13 +45,19 @@ describe('Git worktree inspection', () => {
       isSecondaryWorktree: false,
       currentWorktreeRoot: path.resolve(primary),
       primaryWorktreeRoot: path.resolve(primary),
+      currentBranch: 'master',
     });
     expect(inspectGitWorktree(secondary)).toMatchObject({
       isGitWorktree: true,
       isSecondaryWorktree: true,
       currentWorktreeRoot: path.resolve(secondary),
       primaryWorktreeRoot: path.resolve(primary),
+      currentBranch: 'feature/secondary',
     });
+    expect(isLocalGitBranch(primary, 'master')).toBe(true);
+    expect(isLocalGitBranch(primary, 'feature/secondary')).toBe(true);
+    expect(isLocalGitBranch(primary, 'missing')).toBe(false);
+    expect(listGitWorktreeRoots(primary)).toEqual([path.resolve(primary), path.resolve(secondary)]);
   });
 
   it('returns a stable non-Git result outside a repository', async () => {
@@ -58,7 +68,9 @@ describe('Git worktree inspection', () => {
         isSecondaryWorktree: false,
         currentWorktreeRoot: null,
         primaryWorktreeRoot: null,
+        currentBranch: null,
       });
+      expect(listGitWorktreeRoots(outside)).toEqual([]);
     } finally {
       await fs.rm(outside, { recursive: true, force: true });
     }

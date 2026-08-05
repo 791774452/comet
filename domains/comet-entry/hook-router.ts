@@ -2,6 +2,7 @@ import {
   inspectClassicHookGuard,
   listActiveClassicHookChanges,
 } from '../comet-classic/classic-hook-guard.js';
+import { ClassicLayoutUnavailableError } from '../comet-classic/classic-layout.js';
 import { resolveCurrentChange } from '../comet-classic/classic-current-change.js';
 import {
   inspectNativeHookGuard,
@@ -11,6 +12,7 @@ import { memoizedHookRead } from '../../platform/process/hook-read-cache.js';
 import { readWorkflowProjectConfig } from '../workflow-contract/project-config-reader.js';
 import { readCometCurrentSelection } from './current-selection.js';
 import { readCachedProjectConfig } from './entry-reads.js';
+import { scopeCometHookTargets } from '../workflow-contract/hook-target-scope.js';
 import type { CometHookDecision, CometHookRequest } from './hook-types.js';
 import type { CometWorkflow } from './types.js';
 
@@ -57,6 +59,7 @@ interface HookRouterDependencies {
   listClassic: typeof listActiveClassicHookChanges;
   inspectNative: typeof inspectNativeHookGuard;
   inspectClassic: typeof inspectClassicHookGuard;
+  scopeTargets?: typeof scopeCometHookTargets;
 }
 
 const DEFAULT_DEPENDENCIES: HookRouterDependencies = {
@@ -78,18 +81,27 @@ async function listEnabledActiveChanges(
   enabled: CometWorkflow[],
   dependencies: Pick<HookRouterDependencies, 'listNative' | 'listClassic'>,
   cached?: { workflow: CometWorkflow; candidates: ActiveHookChange[] },
+  options: { tolerateUnavailableClassic?: boolean } = {},
 ): Promise<ActiveHookChange[]> {
+  const listClassic = async (): Promise<ActiveHookChange[]> => {
+    if (!enabled.includes('classic')) return [];
+    if (cached?.workflow === 'classic') return cached.candidates;
+    try {
+      return await dependencies.listClassic(projectRoot);
+    } catch (error) {
+      if (options.tolerateUnavailableClassic && error instanceof ClassicLayoutUnavailableError) {
+        return [];
+      }
+      throw error;
+    }
+  };
   const [native, classic] = await Promise.all([
     enabled.includes('native')
       ? cached?.workflow === 'native'
         ? cached.candidates
         : dependencies.listNative(projectRoot)
       : [],
-    enabled.includes('classic')
-      ? cached?.workflow === 'classic'
-        ? cached.candidates
-        : dependencies.listClassic(projectRoot)
-      : [],
+    listClassic(),
   ]);
   return [...native, ...classic];
 }
@@ -181,7 +193,15 @@ export async function resolveHookWorkflowOwner(
   }
 
   try {
-    const candidates = await listEnabledActiveChanges(projectRoot, enabled, dependencies);
+    const candidates = await listEnabledActiveChanges(
+      projectRoot,
+      enabled,
+      dependencies,
+      undefined,
+      {
+        tolerateUnavailableClassic: true,
+      },
+    );
     return resolveActiveCandidates(candidates);
   } catch (error) {
     return {
@@ -199,6 +219,30 @@ export async function inspectCometHook(
 ): Promise<CometHookDecision> {
   if (request.intent === 'non-write') {
     return { allowed: true, reason: 'Hook event is not a write' };
+  }
+  if (request.intent === 'unknown' || request.targets.length === 0) {
+    return { allowed: true, reason: 'Hook write target is outside Comet attribution' };
+  }
+
+  let projectRequest: CometHookRequest;
+  try {
+    const scoped = await (dependencies.scopeTargets ?? scopeCometHookTargets)(
+      projectRoot,
+      request.targets,
+    );
+    if (scoped.projectTargets.length === 0) {
+      return { allowed: true, reason: 'Write targets are outside the guarded project' };
+    }
+    projectRequest = { ...request, targets: scoped.projectTargets };
+  } catch (error) {
+    return {
+      allowed: false,
+      reason: [
+        'Comet Hook Router scope could not be determined safely.',
+        `Reason: ${error instanceof Error ? error.message : String(error)}`,
+        'Next: verify that the project root is accessible, then retry the write.',
+      ].join(' '),
+    };
   }
 
   try {
@@ -223,8 +267,8 @@ export async function inspectCometHook(
 
     const owner = resolution.owner;
     return owner.workflow === 'native'
-      ? dependencies.inspectNative(projectRoot, request, owner.name)
-      : dependencies.inspectClassic(projectRoot, owner.name, request);
+      ? dependencies.inspectNative(projectRoot, projectRequest, owner.name)
+      : dependencies.inspectClassic(projectRoot, owner.name, projectRequest);
   } catch (error) {
     return {
       allowed: false,

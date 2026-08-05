@@ -803,11 +803,11 @@ describe('comet init E2E', () => {
     );
     const configPath = path.join(tmpDir, '.comet', 'config.yaml');
     const projectInstructions = await import('../../domains/skill/project-instructions.js');
-    const installInstructions = projectInstructions.installCometProjectInstructions;
+    const syncInstructions = projectInstructions.syncCometProjectInstructions;
     let drifted = false;
-    vi.spyOn(projectInstructions, 'installCometProjectInstructions').mockImplementation(
+    vi.spyOn(projectInstructions, 'syncCometProjectInstructions').mockImplementation(
       async (...args) => {
-        await installInstructions(...args);
+        await syncInstructions(...args);
         if (!drifted) {
           const source = await fs.readFile(configPath, 'utf8');
           await fs.writeFile(
@@ -1246,7 +1246,7 @@ describe('comet init E2E', () => {
     expect((await fs.lstat(platformSkills)).isSymbolicLink()).toBe(false);
     await expect(
       fs.readFile(path.join(platformSkills, 'comet', 'SKILL.md'), 'utf8'),
-    ).resolves.toContain('comet workflow resolve . --json');
+    ).resolves.toContain('comet workflow resolve . --activate --json');
     await expect(fs.readFile(path.join(centralComet, 'SKILL.md'), 'utf8')).resolves.toBe(
       '# Central stale Comet\n',
     );
@@ -1525,24 +1525,94 @@ describe('comet init E2E', () => {
     ).rejects.toThrow('custom --platform targets are only supported with project scope');
   });
 
-  it('rejects project artifact roots at global scope without writes', async () => {
+  it('stores a project-relative Native artifact template at global scope without creating artifacts', async () => {
     mockExternalSuccess();
     await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
 
     const { initCommand } = await import('../../app/commands/init.js');
-    await expect(
+    const result = await captureJsonOutput(() =>
       initCommand(tmpDir, {
         yes: true,
         json: true,
         scope: 'global',
-        artifactRoot: 'docs',
+        workflow: 'native',
+        artifactRoot: 'artifacts',
       }),
-    ).rejects.toThrow(/--root is only valid for project-scope initialization/u);
+    );
 
-    await expect(fs.access(path.join(os.homedir(), '.comet'))).rejects.toThrow();
-    await expect(fs.access(path.join(os.homedir(), '.claude'))).rejects.toThrow();
+    expect(result).toMatchObject({ scope: 'global', workflow: 'native' });
+    await expect(
+      fs.readFile(path.join(os.homedir(), '.comet', 'config.yaml'), 'utf8'),
+    ).resolves.toContain('artifact_root: artifacts');
+    await expect(fs.access(path.join(os.homedir(), 'artifacts', 'comet'))).rejects.toThrow();
     await expect(fs.access(path.join(tmpDir, '.comet', 'config.yaml'))).rejects.toThrow();
-    expect(mockedExecFileSync).not.toHaveBeenCalled();
+  });
+
+  it('preserves an existing global Ambient Resume preference during re-initialization', async () => {
+    mockExternalSuccess();
+    const fakeHome = path.join(tmpDir, 'fake-home-existing-global');
+    await fs.mkdir(path.join(fakeHome, '.comet'), { recursive: true });
+    await fs.writeFile(
+      path.join(fakeHome, '.comet', 'config.yaml'),
+      [
+        'schema: comet.global.v1',
+        'default_workflow: native',
+        'workflows:',
+        '  - native',
+        'ambient_resume: false',
+        'native:',
+        '  artifact_root: docs',
+        '',
+      ].join('\n'),
+    );
+    const homedirSpy = vi.spyOn(os, 'homedir').mockReturnValue(fakeHome);
+
+    try {
+      const { initCommand } = await import('../../app/commands/init.js');
+      await captureJsonOutput(() =>
+        initCommand(tmpDir, {
+          yes: true,
+          json: true,
+          scope: 'global',
+          workflow: 'native',
+        }),
+      );
+    } finally {
+      homedirSpy.mockRestore();
+    }
+
+    await expect(
+      fs.readFile(path.join(fakeHome, '.comet', 'config.yaml'), 'utf8'),
+    ).resolves.toContain('ambient_resume: false');
+  });
+
+  it('does not publish a global Classic default when OpenSpec initialization fails', async () => {
+    mockExternalSuccess();
+    await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
+    const externalSuccess = mockedExecFileSync.getMockImplementation();
+    mockedExecFileSync.mockImplementation((command, args, options) => {
+      const cmd = String(command);
+      const cmdArgs = Array.isArray(args) ? args.map(String) : [];
+      if (cmd === 'openspec' && cmdArgs[0] === 'init') {
+        throw new Error('OpenSpec global initialization failed');
+      }
+      return externalSuccess?.(command, args, options) ?? Buffer.from('');
+    });
+
+    const { initCommand } = await import('../../app/commands/init.js');
+    const result = await captureJsonOutput(() =>
+      initCommand(tmpDir, {
+        yes: true,
+        json: true,
+        scope: 'global',
+        workflow: 'classic',
+      }),
+    );
+
+    expect(result.status).toBe('incomplete');
+    await expect(fs.access(path.join(os.homedir(), '.comet', 'config.yaml'))).rejects.toMatchObject(
+      { code: 'ENOENT' },
+    );
   });
 
   it(
@@ -1610,7 +1680,7 @@ describe('comet init E2E', () => {
             expect.objectContaining({ value: 'classic' }),
             expect.objectContaining({ value: 'both' }),
           ],
-          default: 'classic',
+          default: 'native',
         }),
       );
       for (const skill of ['comet-native', 'comet-classic']) {
@@ -1765,16 +1835,18 @@ describe('comet init E2E', () => {
       expect(result.workingDirsCreated).toBe(false);
 
       const config = await fs.readFile(path.join(fakeHome, '.comet', 'config.yaml'), 'utf-8');
+      expect(config).toContain('schema: comet.global.v1');
+      expect(config).toContain('default_workflow: native');
       expect(config).toContain('language: en');
 
       const manifest = await readManifest();
-      for (const skillPath of skillPathsForWorkflow(manifest, 'classic')) {
+      for (const skillPath of skillPathsForWorkflow(manifest, 'native')) {
         const dest = path.join(fakeHome, '.claude', 'skills', skillPath);
         await expect(fs.access(dest)).resolves.toBeUndefined();
       }
       await expect(
         fs.access(path.join(fakeHome, '.claude', 'skills', 'comet-native', 'SKILL.md')),
-      ).rejects.toMatchObject({ code: 'ENOENT' });
+      ).resolves.toBeUndefined();
 
       await expect(fs.stat(path.join(tmpDir, 'docs', 'superpowers', 'specs'))).rejects.toThrow();
     },
@@ -2171,6 +2243,77 @@ describe('comet init E2E', () => {
     expect(registry.projects[0].lastTargets.length).toBeGreaterThan(0);
   });
 
+  it('removes the historical global Router when project init installs the replacement', async () => {
+    mockExternalSuccess();
+    const fakeHome = os.homedir();
+    const globalHooksPath = path.join(fakeHome, '.codex', 'hooks.json');
+    const userHook = { type: 'command', command: 'node user-hook.mjs' };
+    const globalRouter = {
+      type: 'command',
+      command: `node "${path.join(
+        fakeHome,
+        '.agents',
+        'skills',
+        'comet',
+        'scripts',
+        'comet-hook-router.mjs',
+      )}" --platform codex`,
+    };
+    await fs.mkdir(path.dirname(globalHooksPath), { recursive: true });
+    await fs.writeFile(
+      globalHooksPath,
+      JSON.stringify({
+        hooks: { PreToolUse: [{ matcher: 'Write|Edit', hooks: [userHook, globalRouter] }] },
+      }),
+      'utf8',
+    );
+
+    const { initCommand } = await import('../../app/commands/init.js');
+    const result = await captureJsonOutput(() =>
+      initCommand(tmpDir, {
+        yes: true,
+        json: true,
+        scope: 'project',
+        platform: 'codex',
+        workflow: 'native',
+        language: 'en',
+      }),
+    );
+
+    expect(result.status).toBe('complete');
+    const globalHooks = JSON.parse(await fs.readFile(globalHooksPath, 'utf8'));
+    expect(globalHooks.hooks.PreToolUse[0].hooks).toEqual([userHook]);
+    const projectHooks = await fs.readFile(path.join(tmpDir, '.codex', 'hooks.json'), 'utf8');
+    expect(projectHooks.replaceAll('\\', '/')).toContain(
+      `${tmpDir.replaceAll('\\', '/')}/.agents/skills/comet/scripts/comet-hook-router.mjs`,
+    );
+  });
+
+  it('reports project init as incomplete when historical global Hook cleanup is unsafe', async () => {
+    mockExternalSuccess();
+    const fakeHome = os.homedir();
+    const legacyPath = path.join(fakeHome, '.codex', 'settings.local.json');
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+    await fs.writeFile(legacyPath, '{not-json', 'utf8');
+
+    const { initCommand } = await import('../../app/commands/init.js');
+    const result = await captureJsonOutput(() =>
+      initCommand(tmpDir, {
+        yes: true,
+        json: true,
+        scope: 'project',
+        platform: 'codex',
+        workflow: 'native',
+        language: 'en',
+      }),
+    );
+
+    expect(result.status).toBe('incomplete');
+    expect(JSON.stringify(result)).toContain('historical global Hook');
+    await expect(fs.readFile(legacyPath, 'utf8')).resolves.toBe('{not-json');
+    await expect(fs.access(path.join(tmpDir, '.codex', 'hooks.json'))).resolves.toBeUndefined();
+  });
+
   it('preserves the installed language when reusing an explicit project target', async () => {
     mockExternalSuccess();
     const fakeHome = path.join(tmpDir, 'fake-home-explicit-reuse-language');
@@ -2383,7 +2526,7 @@ describe('comet init E2E', () => {
         expect(result.selectedPlatforms).toEqual(['antigravity', 'antigravity2']);
 
         const manifest = await readManifest();
-        for (const skillPath of skillPathsForWorkflow(manifest, 'classic')) {
+        for (const skillPath of skillPathsForWorkflow(manifest, 'native')) {
           const dest = path.join(fakeHome, '.gemini', 'antigravity', 'skills', skillPath);
           await expect(fs.access(dest)).resolves.toBeUndefined();
 
@@ -2416,7 +2559,7 @@ describe('comet init E2E', () => {
       expect(result.selectedPlatforms).toEqual(['opencode']);
 
       const manifest = await readManifest();
-      for (const skillPath of skillPathsForWorkflow(manifest, 'classic')) {
+      for (const skillPath of skillPathsForWorkflow(manifest, 'native')) {
         const dest = path.join(fakeHome, '.config', 'opencode', 'skills', skillPath);
         await expect(fs.access(dest)).resolves.toBeUndefined();
       }
@@ -2426,7 +2569,7 @@ describe('comet init E2E', () => {
       ).resolves.toBeUndefined();
       await expect(
         fs.access(path.join(fakeHome, '.config', 'opencode', 'commands', 'comet-open.md')),
-      ).resolves.toBeUndefined();
+      ).rejects.toThrow();
       await expect(
         fs.access(path.join(fakeHome, '.opencode', 'skills', 'comet', 'SKILL.md')),
       ).rejects.toThrow();
@@ -2453,7 +2596,7 @@ describe('comet init E2E', () => {
       expect(result.selectedPlatforms).toEqual(['mimocode']);
 
       const manifest = await readManifest();
-      for (const skillPath of skillPathsForWorkflow(manifest, 'classic')) {
+      for (const skillPath of skillPathsForWorkflow(manifest, 'native')) {
         const dest = path.join(fakeHome, '.config', 'mimocode', 'skills', skillPath);
         await expect(fs.access(dest)).resolves.toBeUndefined();
       }
@@ -2463,7 +2606,7 @@ describe('comet init E2E', () => {
       ).resolves.toBeUndefined();
       await expect(
         fs.access(path.join(fakeHome, '.config', 'mimocode', 'commands', 'comet-open.md')),
-      ).resolves.toBeUndefined();
+      ).rejects.toThrow();
       await expect(
         fs.access(path.join(fakeHome, '.mimocode', 'skills', 'comet', 'SKILL.md')),
       ).rejects.toThrow();
@@ -2524,7 +2667,7 @@ describe('comet init E2E', () => {
       expect(result.selectedPlatforms).toEqual(['lingma']);
 
       const manifest = await readManifest();
-      for (const skillPath of skillPathsForWorkflow(manifest, 'classic')) {
+      for (const skillPath of skillPathsForWorkflow(manifest, 'native')) {
         const dest = path.join(fakeHome, '.lingma', 'skills', skillPath);
         await expect(fs.access(dest)).resolves.toBeUndefined();
       }
@@ -2555,7 +2698,7 @@ describe('comet init E2E', () => {
       expect(result.selectedPlatforms).toEqual(['kimicode']);
 
       const manifest = await readManifest();
-      for (const skillPath of skillPathsForWorkflow(manifest, 'classic')) {
+      for (const skillPath of skillPathsForWorkflow(manifest, 'native')) {
         const dest = path.join(fakeHome, '.kimi-code', 'skills', skillPath);
         await expect(fs.access(dest)).resolves.toBeUndefined();
       }
@@ -2586,7 +2729,7 @@ describe('comet init E2E', () => {
       expect(result.selectedPlatforms).toEqual(['zcode']);
 
       const manifest = await readManifest();
-      for (const skillPath of skillPathsForWorkflow(manifest, 'classic')) {
+      for (const skillPath of skillPathsForWorkflow(manifest, 'native')) {
         const dest = path.join(fakeHome, '.zcode', 'skills', skillPath);
         await expect(fs.access(dest)).resolves.toBeUndefined();
       }

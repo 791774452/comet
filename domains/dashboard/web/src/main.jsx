@@ -39,6 +39,14 @@ import {
 } from './markdown-preview.js';
 import { NativeWorkflowPanel } from './native-workflow-panel.jsx';
 import { useAnimatedNumber } from './use-animated-number.js';
+import { DashboardWorkspaceRegion } from './workspace-layout.jsx';
+import {
+  dashboardResponseError,
+  isStaleNativeDashboardCursorError,
+  refreshDashboardPage,
+  shouldAutoLoadDashboardDetail,
+  shouldShowDashboardDetailLoading,
+} from './dashboard-web-state.js';
 import './styles.css';
 
 const AUTO_REFRESH_MS = 30_000;
@@ -154,20 +162,52 @@ function DashboardApp({ theme, onToggleTheme }) {
   const [activeProjectId, setActiveProjectId] = useState(null);
   const [workflow, setWorkflow] = useState('classic');
   const [projects, setProjects] = useState([]);
+  const [projectsReady, setProjectsReady] = useState(false);
+  const [pages, setPages] = useState({ active: null, archived: null, all: null });
+  const [nativePages, setNativePages] = useState({ active: null, archived: null, all: null });
+  const [pageLoading, setPageLoading] = useState(null);
+  const [nativePageLoading, setNativePageLoading] = useState(null);
+  const [nativeSelectedDetail, setNativeSelectedDetail] = useState(null);
+  const [nativeDetailLoading, setNativeDetailLoading] = useState(false);
+  const [nativeDetailError, setNativeDetailError] = useState(null);
   const [selectedId, setSelectedId] = useState(null);
+  const [selectedDetail, setSelectedDetail] = useState(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState(null);
   const [tab, setTab] = useState('active');
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [railOpen, setRailOpen] = useState(false);
   const [artifact, setArtifact] = useState(null);
   const snapshotRequestRef = useRef(null);
+  const pageRequestRef = useRef(null);
+  const nativePageRequestRef = useRef(null);
+  const nativeDetailRequestRef = useRef(null);
+  const detailRequestRef = useRef(null);
+  const selectedIdRef = useRef(null);
+  const pagesRef = useRef({ active: null, archived: null, all: null });
+  const nativePagesRef = useRef({ active: null, archived: null, all: null });
+  const lastLoadedQueryRef = useRef('');
   const { message: messageApi } = AntApp.useApp();
   const toast = useCallback((content, type = 'success') => messageApi[type](content), [messageApi]);
 
   const useDemo = new URLSearchParams(window.location.search).has('demo');
+  const queryRef = useRef(query);
+  const tabRef = useRef(tab);
+  queryRef.current = query;
+  tabRef.current = tab;
+
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+  }, [selectedId]);
+
+  useEffect(() => {
+    pagesRef.current = pages;
+  }, [pages]);
 
   const refresh = useCallback(
     async (manual = false) => {
+      if (!useDemo && !activeProjectId) return;
       snapshotRequestRef.current?.abort();
       const controller = new AbortController();
       snapshotRequestRef.current = controller;
@@ -175,10 +215,49 @@ function DashboardApp({ theme, onToggleTheme }) {
       try {
         const next = useDemo
           ? await loadDemoSnapshot()
-          : await fetchSnapshot(activeProjectId, controller.signal);
+          : await fetchDashboardOverview(activeProjectId, controller.signal, queryRef.current);
         if (snapshotRequestRef.current !== controller || controller.signal.aborted) return;
-        setSnapshot(next);
-        setSelectedId((previous) => pickSelected(next, previous));
+
+        if (useDemo) {
+          setSnapshot(next);
+          const nextId = pickSelected(next, selectedIdRef.current);
+          setSelectedId(nextId);
+          setSelectedDetail(findChange(next, nextId));
+          lastLoadedQueryRef.current = query;
+        } else {
+          const initialPage = next.initialChanges;
+          const currentTab = tabRef.current;
+          const currentQuery = queryRef.current;
+          const queryChanged = currentQuery !== lastLoadedQueryRef.current;
+          const nextPages = queryChanged
+            ? { active: initialPage, archived: null, all: null }
+            : {
+                ...pagesRef.current,
+                active: refreshDashboardPage(pagesRef.current.active, initialPage),
+              };
+          const currentPage = currentTab === 'active' ? nextPages.active : nextPages[currentTab];
+          setSnapshot(materializeOverview(next, initialPage));
+          pagesRef.current = nextPages;
+          setPages(nextPages);
+          const nextNativePages = queryChanged
+            ? { active: null, archived: null, all: null }
+            : nativePagesRef.current;
+          nativePagesRef.current = nextNativePages;
+          setNativePages(nextNativePages);
+          const nextId = pickSelectedFromPage(
+            queryChanged && currentTab !== 'active' ? nextPages[currentTab] : currentPage,
+            selectedIdRef.current,
+          );
+          const previousSelectedId = selectedIdRef.current;
+          setSelectedId(nextId);
+          selectedIdRef.current = nextId;
+          if (nextId !== previousSelectedId) {
+            setSelectedDetail(null);
+            setDetailError(null);
+            setDetailLoading(false);
+          }
+          lastLoadedQueryRef.current = currentQuery;
+        }
         if (manual) toast('状态已刷新');
       } catch (error) {
         if (controller.signal.aborted) return;
@@ -190,10 +269,11 @@ function DashboardApp({ theme, onToggleTheme }) {
         }
       }
     },
-    [activeProjectId, useDemo],
+    [activeProjectId, toast, useDemo],
   );
 
   useEffect(() => {
+    if (!useDemo && (!projectsReady || !activeProjectId)) return undefined;
     void refresh(false);
 
     const timer = window.setInterval(() => {
@@ -201,9 +281,18 @@ function DashboardApp({ theme, onToggleTheme }) {
     }, AUTO_REFRESH_MS);
 
     return () => window.clearInterval(timer);
-  }, [refresh]);
+  }, [activeProjectId, projectsReady, refresh, useDemo]);
 
-  useEffect(() => () => snapshotRequestRef.current?.abort(), []);
+  useEffect(
+    () => () => {
+      snapshotRequestRef.current?.abort();
+      pageRequestRef.current?.abort();
+      nativePageRequestRef.current?.abort();
+      nativeDetailRequestRef.current?.abort();
+      detailRequestRef.current?.abort();
+    },
+    [],
+  );
 
   useEffect(() => {
     if (useDemo) return undefined;
@@ -219,15 +308,247 @@ function DashboardApp({ theme, onToggleTheme }) {
         const next =
           available.find((project) => project.id === remembered)?.id ?? directory.currentProjectId;
         setActiveProjectId((previous) => previous ?? next);
+        setProjectsReady(true);
       })
-      .catch((error) => toast(`项目列表加载失败：${error.message}`, 'error'));
+      .catch((error) => {
+        if (cancelled) return;
+        setProjectsReady(true);
+        toast(`项目列表加载失败：${error.message}`, 'error');
+      });
     return () => {
       cancelled = true;
     };
   }, [useDemo]);
 
-  const selected = useMemo(() => findChange(snapshot, selectedId), [snapshot, selectedId]);
-  const visible = useMemo(() => filterChanges(snapshot, tab, query), [snapshot, tab, query]);
+  const loadPage = useCallback(
+    async (nextTab, append = false) => {
+      if (useDemo || !activeProjectId) return;
+      if (append && pageRequestRef.current) return;
+      const existing = pagesRef.current[nextTab];
+      if (append && !existing?.nextCursor) return;
+      pageRequestRef.current?.abort();
+      const controller = new AbortController();
+      pageRequestRef.current = controller;
+      setPageLoading(nextTab);
+      try {
+        const page = await fetchDashboardChangePage(activeProjectId, nextTab, {
+          cursor: append ? existing?.nextCursor : undefined,
+          query,
+          signal: controller.signal,
+        });
+        if (pageRequestRef.current !== controller || controller.signal.aborted) return;
+        const merged =
+          append && existing ? { ...page, items: [...existing.items, ...page.items] } : page;
+        setPages((previous) => ({ ...previous, [nextTab]: merged }));
+        setSnapshot((previous) =>
+          previous ? updateSnapshotChangeRows(previous, nextTab, merged.items) : previous,
+        );
+        lastLoadedQueryRef.current = query;
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        toast(`变更列表加载失败：${error.message}`, 'error');
+      } finally {
+        if (pageRequestRef.current === controller) {
+          pageRequestRef.current = null;
+          setPageLoading(null);
+        }
+      }
+    },
+    [activeProjectId, query, toast, useDemo],
+  );
+
+  useEffect(() => {
+    if (useDemo || !snapshot || !activeProjectId || query === lastLoadedQueryRef.current) {
+      return undefined;
+    }
+    const timer = window.setTimeout(() => {
+      snapshotRequestRef.current?.abort();
+      pageRequestRef.current?.abort();
+      nativePageRequestRef.current?.abort();
+      setPages({ active: null, archived: null, all: null });
+      pagesRef.current = { active: null, archived: null, all: null };
+      setNativePages({ active: null, archived: null, all: null });
+      nativePagesRef.current = { active: null, archived: null, all: null };
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [activeProjectId, query, snapshot, useDemo]);
+
+  useEffect(() => {
+    if (useDemo || !snapshot || !activeProjectId || pages[tab]) return;
+    void loadPage(tab);
+  }, [activeProjectId, loadPage, pages, snapshot, tab, useDemo]);
+
+  const loadNativePage = useCallback(
+    async (nextTab, append = false) => {
+      if (useDemo || workflow !== 'native' || !activeProjectId || !snapshot?.native) return;
+      if (append && nativePageRequestRef.current) return;
+      const existing = nativePagesRef.current[nextTab];
+      if (append && !existing?.nextCursor) return;
+      nativePageRequestRef.current?.abort();
+      const controller = new AbortController();
+      nativePageRequestRef.current = controller;
+      setNativePageLoading(nextTab);
+      try {
+        const page = await fetchDashboardNativeChangePage(activeProjectId, nextTab, {
+          cursor: append ? existing?.nextCursor : undefined,
+          query,
+          signal: controller.signal,
+        });
+        if (nativePageRequestRef.current !== controller || controller.signal.aborted) return;
+        const merged =
+          append && existing ? { ...page, items: [...existing.items, ...page.items] } : page;
+        const nextPages = { ...nativePagesRef.current, [nextTab]: merged };
+        nativePagesRef.current = nextPages;
+        setNativePages(nextPages);
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        if (append && isStaleNativeDashboardCursorError(error)) {
+          const resetPages = { ...nativePagesRef.current, [nextTab]: null };
+          nativePagesRef.current = resetPages;
+          setNativePages(resetPages);
+          toast('Native 变更列表已更新，正在重新加载第一页。', 'info');
+          return;
+        }
+        toast(`Native 变更列表加载失败：${error.message}`, 'error');
+      } finally {
+        if (nativePageRequestRef.current === controller) {
+          nativePageRequestRef.current = null;
+          setNativePageLoading(null);
+        }
+      }
+    },
+    [activeProjectId, query, snapshot, toast, useDemo, workflow],
+  );
+
+  const selectNativeChange = useCallback(
+    async (change) => {
+      if (!change) return;
+      setNativeDetailError(null);
+      if (useDemo) {
+        setNativeSelectedDetail(change);
+        return;
+      }
+      if (!activeProjectId) return;
+      nativeDetailRequestRef.current?.abort();
+      const controller = new AbortController();
+      nativeDetailRequestRef.current = controller;
+      setNativeDetailLoading(true);
+      try {
+        const detail = await fetchDashboardNativeChangeDetail(
+          activeProjectId,
+          change,
+          controller.signal,
+        );
+        if (nativeDetailRequestRef.current !== controller || controller.signal.aborted) return;
+        setNativeSelectedDetail(detail);
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        setNativeDetailError({
+          change,
+          reason: error instanceof Error ? error.message : String(error),
+        });
+        toast(`Native 变更详情加载失败：${error.message}`, 'error');
+      } finally {
+        if (nativeDetailRequestRef.current === controller) {
+          nativeDetailRequestRef.current = null;
+          setNativeDetailLoading(false);
+        }
+      }
+    },
+    [activeProjectId, toast, useDemo],
+  );
+
+  useEffect(() => {
+    if (useDemo || workflow !== 'native' || !snapshot?.native || nativePages[tab]) return;
+    void loadNativePage(tab);
+  }, [loadNativePage, nativePages, snapshot, tab, useDemo, workflow]);
+
+  const selected = selectedDetail;
+  const visible = useMemo(
+    () => (useDemo ? filterChanges(snapshot, tab, query) : (pages[tab]?.items ?? [])),
+    [pages, query, snapshot, tab, useDemo],
+  );
+  const activePage = pages[tab];
+  const visibleTotal = useDemo ? visible.length : (activePage?.total ?? visible.length);
+  const nativePage = nativePages[tab];
+  const nativeOverviewTotal =
+    tab === 'active'
+      ? (snapshot?.native?.activeChangeCount ?? 0)
+      : tab === 'archived'
+        ? (snapshot?.native?.archivedChangeCount ?? 0)
+        : (snapshot?.native?.totalChangeCount ?? 0);
+  const nativeVisibleTotal = useDemo
+    ? (snapshot?.native?.changes?.length ?? 0)
+    : (nativePage?.total ?? nativeOverviewTotal);
+
+  const selectChange = useCallback(
+    async (id) => {
+      selectedIdRef.current = id;
+      setSelectedId(id);
+      setDetailError(null);
+      if (useDemo) {
+        setSelectedDetail(findChange(snapshot, id));
+        return;
+      }
+      if (!activeProjectId) return;
+      detailRequestRef.current?.abort();
+      const controller = new AbortController();
+      detailRequestRef.current = controller;
+      setDetailLoading(true);
+      try {
+        const detail = await fetchDashboardChangeDetail(activeProjectId, id, controller.signal);
+        if (detailRequestRef.current !== controller || controller.signal.aborted) return;
+        setSelectedDetail(detail);
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        setDetailError({ id, message: error instanceof Error ? error.message : String(error) });
+        toast(`变更详情加载失败：${error.message}`, 'error');
+      } finally {
+        if (detailRequestRef.current === controller) {
+          detailRequestRef.current = null;
+          setDetailLoading(false);
+        }
+      }
+    },
+    [activeProjectId, snapshot, toast, useDemo],
+  );
+
+  useEffect(() => {
+    if (useDemo || !snapshot || !activeProjectId) return;
+    if (
+      !shouldAutoLoadDashboardDetail({
+        detailLoading,
+        selectedId,
+        selectedDetailId: selectedDetail?.id ?? null,
+        visibleIds: visible.map((change) => change.id),
+        failedDetailId: detailError?.id ?? null,
+      })
+    )
+      return;
+
+    const nextId = visible[0]?.id ?? null;
+    detailRequestRef.current?.abort();
+    if (!nextId) {
+      selectedIdRef.current = null;
+      setSelectedId(null);
+      setSelectedDetail(null);
+      setDetailLoading(false);
+      return;
+    }
+    void selectChange(nextId);
+  }, [
+    activeProjectId,
+    detailLoading,
+    detailError,
+    selectChange,
+    selectedDetail,
+    selectedId,
+    snapshot,
+    useDemo,
+    visible,
+  ]);
+
+  const selectTab = useCallback((nextTab) => setTab(nextTab), []);
 
   return (
     <main className="dashboard-workbench min-h-screen bg-surface text-fg antialiased lg:grid lg:grid-cols-[var(--rail-w)_1fr]">
@@ -251,8 +572,23 @@ function DashboardApp({ theme, onToggleTheme }) {
           activeProjectId={activeProjectId}
           onProjectSelect={(nextProjectId) => {
             localStorage.setItem('comet-dashboard-project', nextProjectId);
+            snapshotRequestRef.current?.abort();
+            pageRequestRef.current?.abort();
+            nativePageRequestRef.current?.abort();
+            nativeDetailRequestRef.current?.abort();
+            detailRequestRef.current?.abort();
             setActiveProjectId(nextProjectId);
+            setSnapshot(null);
+            setPages({ active: null, archived: null, all: null });
+            pagesRef.current = { active: null, archived: null, all: null };
+            setNativePages({ active: null, archived: null, all: null });
+            nativePagesRef.current = { active: null, archived: null, all: null };
+            setNativeSelectedDetail(null);
+            setNativeDetailError(null);
             setSelectedId(null);
+            selectedIdRef.current = null;
+            setSelectedDetail(null);
+            setDetailError(null);
             setQuery('');
             setRailOpen(false);
           }}
@@ -273,6 +609,20 @@ function DashboardApp({ theme, onToggleTheme }) {
                 native={snapshot.native}
                 git={snapshot.git}
                 query={query}
+                tab={tab}
+                onTab={selectTab}
+                pagedChanges={useDemo ? null : (nativePage?.items ?? [])}
+                total={nativeVisibleTotal}
+                hasMore={Boolean(nativePage?.nextCursor)}
+                pageLoading={nativePageLoading === tab || (!useDemo && !nativePage)}
+                onLoadMore={() => loadNativePage(tab, true)}
+                selectedDetail={nativeSelectedDetail}
+                detailLoading={nativeDetailLoading}
+                detailError={nativeDetailError}
+                onSelect={selectNativeChange}
+                onRetryDetail={() =>
+                  nativeDetailError?.change && selectNativeChange(nativeDetailError.change)
+                }
                 onPreview={setArtifact}
                 onCopyChangeName={(name) =>
                   copyText(name)
@@ -284,11 +634,18 @@ function DashboardApp({ theme, onToggleTheme }) {
               <Dashboard
                 snapshot={snapshot}
                 visible={visible}
+                visibleTotal={visibleTotal}
                 selected={selected}
                 selectedId={selectedId}
                 tab={tab}
-                onTab={setTab}
-                onSelect={setSelectedId}
+                onTab={selectTab}
+                onSelect={selectChange}
+                hasMore={Boolean(activePage?.nextCursor)}
+                pageLoading={pageLoading === tab}
+                onLoadMore={() => loadPage(tab, true)}
+                detailLoading={detailLoading}
+                detailError={detailError}
+                onRetryDetail={() => selectedId && selectChange(selectedId)}
                 onPreview={setArtifact}
               />
             )}
@@ -379,9 +736,31 @@ function Topbar({
   );
 }
 
-function Dashboard({ snapshot, visible, selected, selectedId, tab, onTab, onSelect, onPreview }) {
-  const hasClassicChanges = snapshot.changes.active.length + snapshot.changes.archived.length > 0;
+function Dashboard({
+  snapshot,
+  visible,
+  visibleTotal,
+  selected,
+  selectedId,
+  tab,
+  onTab,
+  onSelect,
+  hasMore,
+  pageLoading,
+  onLoadMore,
+  detailLoading,
+  detailError,
+  onRetryDetail,
+  onPreview,
+}) {
+  const hasClassicChanges = snapshot.summary.activeChanges + snapshot.summary.archivedChanges > 0;
   const classicWarning = snapshot.classicError && hasClassicChanges;
+  const detailPending = shouldShowDashboardDetailLoading({
+    detailLoading,
+    selectedId,
+    selectedDetailId: selected?.id ?? null,
+    failedDetailId: detailError?.id ?? null,
+  });
   return (
     <div className="mx-auto min-w-0 max-w-dashboard">
       <SectionHead
@@ -401,17 +780,44 @@ function Dashboard({ snapshot, visible, selected, selectedId, tab, onTab, onSele
       ) : (
         <>
           {classicWarning ? <ClassicWarning error={snapshot.classicError} /> : null}
-          <div className="dashboard-workspace-region grid min-w-0 items-start gap-5 xl:grid-cols-[minmax(260px,320px)_minmax(0,1fr)] 2xl:grid-cols-[minmax(260px,320px)_minmax(0,1fr)_minmax(260px,320px)]">
-            <AntChangesExplorer
-              visible={visible}
-              selectedId={selectedId}
-              tab={tab}
-              onTab={onTab}
-              onSelect={onSelect}
-            />
-            {selected && <AntChangeDetail change={selected} onPreview={onPreview} />}
-            {selected && <SidePanel change={selected} git={snapshot.git} onPreview={onPreview} />}
-          </div>
+          <DashboardWorkspaceRegion
+            leftClassName="dashboard-workspace-left-inner-scroll"
+            stableFrame
+            left={
+              <AntChangesExplorer
+                visible={visible}
+                total={visibleTotal}
+                selectedId={selectedId}
+                tab={tab}
+                onTab={onTab}
+                onSelect={onSelect}
+                hasMore={hasMore}
+                pageLoading={pageLoading}
+                onLoadMore={onLoadMore}
+              />
+            }
+            center={
+              selected ? (
+                <AntChangeDetail change={selected} onPreview={onPreview} />
+              ) : detailPending ? (
+                <div className="change-detail dashboard-change-detail-loading min-w-0 rounded-lg bg-bg p-10 text-center text-sm text-muted shadow-raised">
+                  正在加载变更详情…
+                </div>
+              ) : detailError ? (
+                <div className="change-detail min-w-0 rounded-lg bg-bg p-10 text-center text-sm text-danger shadow-raised">
+                  <p role="alert">变更详情加载失败：{detailError.message}</p>
+                  <Button className="mt-4" onClick={onRetryDetail}>
+                    重试
+                  </Button>
+                </div>
+              ) : null
+            }
+            right={
+              selected ? (
+                <SidePanel change={selected} git={snapshot.git} onPreview={onPreview} />
+              ) : null
+            }
+          />
         </>
       )}
     </div>
@@ -739,7 +1145,7 @@ function TaskProgress({ change }) {
 
 function SidePanel({ change, git, onPreview }) {
   return (
-    <aside className="min-h-[480px] space-y-4 xl:col-start-2 2xl:col-start-auto">
+    <aside className="min-h-[480px] space-y-4">
       {change.status === 'archived' ? (
         <ArchiveSummary change={change} />
       ) : (
@@ -1266,11 +1672,59 @@ async function fetchDashboardProjects() {
   return res.json();
 }
 
-async function fetchSnapshot(projectId, signal) {
-  const endpoint = projectId
-    ? `/api/dashboard/projects/${encodeURIComponent(projectId)}`
-    : '/api/dashboard';
-  const res = await fetch(endpoint, { cache: 'no-store', signal });
+async function fetchDashboardOverview(projectId, signal, query = '') {
+  const params = new URLSearchParams();
+  if (query.trim()) params.set('q', query.trim());
+  const suffix = params.toString() ? `?${params.toString()}` : '';
+  const res = await fetch(
+    `/api/dashboard/projects/${encodeURIComponent(projectId)}/overview${suffix}`,
+    { cache: 'no-store', signal },
+  );
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+async function fetchDashboardChangePage(projectId, status, options = {}) {
+  const params = new URLSearchParams({ status, limit: '5' });
+  if (options.cursor) params.set('cursor', options.cursor);
+  if (options.query?.trim()) params.set('q', options.query.trim());
+  const res = await fetch(
+    `/api/dashboard/projects/${encodeURIComponent(projectId)}/changes?${params.toString()}`,
+    { cache: 'no-store', signal: options.signal },
+  );
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+async function fetchDashboardNativeChangePage(projectId, status, options = {}) {
+  const params = new URLSearchParams({ status, limit: '5' });
+  if (options.cursor) params.set('cursor', options.cursor);
+  if (options.query?.trim()) params.set('q', options.query.trim());
+  const res = await fetch(
+    `/api/dashboard/projects/${encodeURIComponent(projectId)}/native-changes?${params.toString()}`,
+    { cache: 'no-store', signal: options.signal },
+  );
+  if (!res.ok) throw await dashboardResponseError(res);
+  return res.json();
+}
+
+async function fetchDashboardNativeChangeDetail(projectId, change, signal) {
+  const params = new URLSearchParams({ status: change.status, changeName: change.name });
+  if (change.archiveName) params.set('archiveName', change.archiveName);
+  const res = await fetch(
+    `/api/dashboard/projects/${encodeURIComponent(projectId)}/native-change?${params.toString()}`,
+    { cache: 'no-store', signal },
+  );
+  if (!res.ok) throw await dashboardResponseError(res);
+  return res.json();
+}
+
+async function fetchDashboardChangeDetail(projectId, changeId, signal) {
+  const params = new URLSearchParams({ changeId });
+  const res = await fetch(
+    `/api/dashboard/projects/${encodeURIComponent(projectId)}/change?${params.toString()}`,
+    { cache: 'no-store', signal },
+  );
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
@@ -1518,7 +1972,17 @@ function AntSummaryCard({ title, value, note, status, icon: Icon, tone, selected
   );
 }
 
-function AntChangesExplorer({ visible, selectedId, tab, onTab, onSelect }) {
+function AntChangesExplorer({
+  visible,
+  total,
+  selectedId,
+  tab,
+  onTab,
+  onSelect,
+  hasMore,
+  pageLoading,
+  onLoadMore,
+}) {
   const items = [
     ['active', '活跃'],
     ['archived', '已归档'],
@@ -1526,10 +1990,10 @@ function AntChangesExplorer({ visible, selectedId, tab, onTab, onSelect }) {
   ].map(([key, label]) => ({ key, label }));
   return (
     <AntCard
-      className="min-w-0"
+      className="classic-changes-explorer min-w-0"
       title={
         <span>
-          Changes Explorer <Badge count={visible.length} showZero className="ml-2" />
+          Changes Explorer <Badge count={total} showZero className="ml-2" />
         </span>
       }
     >
@@ -1539,54 +2003,125 @@ function AntChangesExplorer({ visible, selectedId, tab, onTab, onSelect }) {
         items={items.map((item) => ({
           ...item,
           children: (
-            <div className="dashboard-change-list">
-              {visible.length === 0 ? (
-                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无变更" />
-              ) : (
-                visible.map((change) => (
-                  <div
-                    key={change.id}
-                    className={`dashboard-change-list-item ${
-                      change.id === selectedId ? 'rounded-lg bg-accent-softer px-2' : 'px-2'
-                    }`}
-                  >
-                    <Button
-                      className="dashboard-change-row"
-                      type="text"
-                      block
-                      onClick={() => onSelect(change.id)}
-                    >
-                      <div className="flex w-full items-center gap-2.5 text-left">
-                        <div className="min-w-0 flex-1">
-                          <strong className="block truncate">{change.displayName}</strong>
-                          <span className="mt-0.5 block text-xs text-meta">
-                            {phaseLabel(change.phase)} · {change.tasks.completed}/
-                            {change.tasks.total}
-                          </span>
-                          <Progress
-                            percent={
-                              change.tasks.total
-                                ? Math.round((change.tasks.completed / change.tasks.total) * 100)
-                                : 0
-                            }
-                            className="mt-1"
-                            size="small"
-                            showInfo={false}
-                          />
-                        </div>
-                        <Pill tone={VERIFY_TONE[change.verify.result] ?? 'neutral'}>
-                          {VERIFY_LABEL[change.verify.result] ?? '未知'}
-                        </Pill>
-                      </div>
-                    </Button>
-                  </div>
-                ))
-              )}
-            </div>
+            <DashboardChangeList
+              visible={visible}
+              selectedId={selectedId}
+              onSelect={onSelect}
+              hasMore={hasMore}
+              pageLoading={pageLoading}
+              onLoadMore={onLoadMore}
+            />
           ),
         }))}
       />
     </AntCard>
+  );
+}
+
+function pickSelectedFromPage(page, previous) {
+  const items = page?.items ?? [];
+  if (previous && items.some((change) => change.id === previous)) return previous;
+  return items[0]?.id ?? null;
+}
+
+function materializeOverview(overview, initialPage) {
+  return {
+    ...overview,
+    changes: {
+      active: initialPage?.items ?? [],
+      archived: [],
+    },
+  };
+}
+
+function updateSnapshotChangeRows(snapshot, status, items) {
+  if (status === 'active') {
+    return { ...snapshot, changes: { ...snapshot.changes, active: items } };
+  }
+  if (status === 'archived') {
+    return { ...snapshot, changes: { ...snapshot.changes, archived: items } };
+  }
+  return {
+    ...snapshot,
+    changes: {
+      active: items.filter((change) => change.status === 'active'),
+      archived: items.filter((change) => change.status === 'archived'),
+    },
+  };
+}
+
+function DashboardChangeList({ visible, selectedId, onSelect, hasMore, pageLoading, onLoadMore }) {
+  const listRef = useRef(null);
+  const sentinelRef = useRef(null);
+
+  useEffect(() => {
+    const root = listRef.current;
+    const target = sentinelRef.current;
+    if (!root || !target || !hasMore || !onLoadMore) return undefined;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting && !pageLoading) onLoadMore();
+      },
+      { root },
+    );
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [hasMore, onLoadMore, pageLoading]);
+
+  const handleScroll = useCallback(
+    (event) => {
+      if (!hasMore || pageLoading || !onLoadMore) return;
+      const { scrollTop, clientHeight, scrollHeight } = event.currentTarget;
+      if (scrollTop > 0 && scrollTop + clientHeight >= scrollHeight - 24) onLoadMore();
+    },
+    [hasMore, onLoadMore, pageLoading],
+  );
+
+  return (
+    <div ref={listRef} className="dashboard-change-list" onScroll={handleScroll}>
+      {visible.length === 0 && !pageLoading ? (
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无变更" />
+      ) : (
+        visible.map((change) => (
+          <div
+            key={change.id}
+            className={`dashboard-change-list-item ${change.id === selectedId ? 'selected' : ''} px-2`}
+          >
+            <Button
+              className={`dashboard-change-row ${change.id === selectedId ? 'dashboard-change-row-selected' : ''}`}
+              type="text"
+              block
+              onClick={() => onSelect(change.id)}
+            >
+              <div className="flex w-full items-center gap-2.5 text-left">
+                <div className="min-w-0 flex-1">
+                  <strong className="block truncate">{change.displayName}</strong>
+                  <span className="mt-0.5 block text-xs text-meta">
+                    {phaseLabel(change.phase)} · {change.tasks.completed}/{change.tasks.total}
+                  </span>
+                  <Progress
+                    percent={
+                      change.tasks.total
+                        ? Math.round((change.tasks.completed / change.tasks.total) * 100)
+                        : 0
+                    }
+                    className="mt-1"
+                    size="small"
+                    showInfo={false}
+                  />
+                </div>
+                <Pill tone={VERIFY_TONE[change.verify.result] ?? 'neutral'}>
+                  {VERIFY_LABEL[change.verify.result] ?? '未知'}
+                </Pill>
+              </div>
+            </Button>
+          </div>
+        ))
+      )}
+      <div ref={sentinelRef} className="py-2 text-center text-xs text-meta" aria-live="polite">
+        {pageLoading ? <Spin size="small" /> : hasMore ? '继续下滑加载更多' : null}
+      </div>
+    </div>
   );
 }
 

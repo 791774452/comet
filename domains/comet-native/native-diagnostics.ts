@@ -29,6 +29,7 @@ import { readNativeVerificationEvidence } from './native-evidence-storage.js';
 import { inspectNativeImplementationScopeFreshness } from './native-verification-runtime.js';
 import {
   inspectNativeWorkspaceAdvisory,
+  inspectNativeWorkspaceBinding,
   isNativeWorkspaceAdvisoryCode,
   readNativeWorkspaceIdentity,
 } from './native-workspace.js';
@@ -52,11 +53,7 @@ export const NATIVE_STATUS_PAGE_LIMITS = Object.freeze({
 });
 
 async function selectedName(paths: NativeProjectPaths): Promise<string | null> {
-  try {
-    return (await readNativeSelectionRecord(paths))?.change ?? null;
-  } catch {
-    return null;
-  }
+  return (await readNativeSelectionRecord(paths))?.change ?? null;
 }
 
 export function nativeNextCommand(
@@ -174,6 +171,7 @@ export async function inspectNativeStatus(
   options?: {
     details?: boolean;
     acceptanceCursor?: string;
+    includeConflictFindings?: boolean;
     clarificationMode?: NativeClarificationMode;
     maxVerifyFailures?: number;
   },
@@ -358,39 +356,50 @@ export async function inspectNativeStatus(
     }
   }
   const conflictFindings: NativeFinding[] = [];
-  try {
-    const conflicts = await inspectNativeChangeConflicts(paths, state.name);
-    conflictFindings.push(
-      ...conflicts.findingCodes.map((code) => ({
-        code,
-        message: `Native change overlap is visible in the current root: ${code}`,
-      })),
-    );
-  } catch {
-    conflictFindings.push({
-      code: 'native-conflict-inspection-invalid',
-      message: 'Native change overlap could not be recomputed safely',
-    });
+  if (options?.includeConflictFindings !== false) {
+    try {
+      const conflicts = await inspectNativeChangeConflicts(paths, state.name, {
+        tolerateInvalidSiblings: true,
+      });
+      conflictFindings.push(
+        ...conflicts.findingCodes.map((code) => ({
+          code,
+          message: `Native change overlap is visible in the current root: ${code}`,
+        })),
+      );
+    } catch {
+      conflictFindings.push({
+        code: 'native-conflict-inspection-invalid',
+        message: 'Native change overlap could not be recomputed safely',
+      });
+    }
   }
   const workspaceFindings: NativeFinding[] = [];
   try {
     const identity = await readNativeWorkspaceIdentity(paths, state.name);
     if (identity) {
-      const workspace = await inspectNativeWorkspaceAdvisory({
-        paths,
-        identity,
-      });
-      workspaceFindings.push(
-        ...workspace.findingCodes.map((code) => ({
-          code,
-          message: `Native workspace advisory changed: ${code} (${workspace.driftComponents.join(', ') || 'no-component'})`,
-        })),
-      );
+      if (identity.schema === 'comet.native.workspace.v3') {
+        const workspace = await inspectNativeWorkspaceBinding({ paths, identity });
+        if (workspace.state === 'drifted' && workspace.code) {
+          workspaceFindings.push({
+            code: workspace.code,
+            message: workspace.message ?? 'Native workspace binding is no longer valid',
+          });
+        }
+      } else {
+        const workspace = await inspectNativeWorkspaceAdvisory({ paths, identity });
+        workspaceFindings.push(
+          ...workspace.findingCodes.map((code) => ({
+            code,
+            message: `Native workspace advisory changed: ${code} (${workspace.driftComponents.join(', ') || 'no-component'})`,
+          })),
+        );
+      }
     }
   } catch {
     workspaceFindings.push({
-      code: 'workspace-inspection-unavailable',
-      message: 'Native workspace advisory could not be recomputed safely',
+      code: 'workspace-binding-invalid',
+      message: 'Native workspace binding could not be read or validated safely',
     });
   }
   const verifyScopeFindings: NativeFinding[] = [];
@@ -461,7 +470,10 @@ export async function inspectNativeStatus(
       ));
   const mutationBlocked = findings.some(
     (finding) =>
-      finding.code === 'trajectory-tail-incomplete' || finding.code === 'trajectory-invalid',
+      finding.code === 'trajectory-tail-incomplete' ||
+      finding.code === 'trajectory-invalid' ||
+      finding.requiredAction === 'return-to-bound-working-directory' ||
+      finding.requiredAction === 'repair-workspace-binding',
   );
   const repairBlocked =
     repair?.disposition === 'manual-stop' || repair?.disposition === 'hard-stop';
@@ -513,7 +525,7 @@ export async function inspectNativeStatus(
   };
 }
 
-async function boundedNativeChangeNames(paths: NativeProjectPaths): Promise<string[]> {
+export async function listNativeChangeNames(paths: NativeProjectPaths): Promise<string[]> {
   let guard: Awaited<ReturnType<typeof captureNativeProtectedDirectoryGuard>>;
   try {
     guard = await captureNativeProtectedDirectoryGuard({
@@ -586,7 +598,7 @@ export async function listNativeStatusPage(
     maxVerifyFailures?: number;
   },
 ): Promise<NativeStatusPageProjection> {
-  const names = await boundedNativeChangeNames(paths);
+  const names = await listNativeChangeNames(paths);
   const namesHash = canonicalHash('comet.native.status-names.v1', names);
   const offset = nativeStatusOffset({
     namesHash,
@@ -596,6 +608,7 @@ export async function listNativeStatusPage(
   const candidates = await Promise.all(
     names.slice(offset, offset + NATIVE_STATUS_PAGE_LIMITS.maxItems).map((name) =>
       inspectNativeStatus(paths, name, {
+        includeConflictFindings: false,
         clarificationMode: options?.clarificationMode,
         maxVerifyFailures: options?.maxVerifyFailures,
       }),

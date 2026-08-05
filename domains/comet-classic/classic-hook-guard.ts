@@ -10,6 +10,7 @@ import {
 import { inspectClassicActiveChangeDirectory, openSpecChangeNameError } from './classic-paths.js';
 import { inspectClassicProjectTarget } from './classic-protected-path.js';
 import type { CometHookDecision, CometHookRequest } from '../comet-entry/hook-types.js';
+import { scopeCometHookTargets } from '../workflow-contract/hook-target-scope.js';
 import type { ClassicCommandHandler, ClassicCommandResult } from './classic-cli.js';
 import {
   driftStaleReason,
@@ -19,6 +20,10 @@ import {
 import { resolveCurrentChange } from './classic-current-change.js';
 import { readClassicState, readLegacyState } from './classic-store.js';
 import type { ClassicPhase, ClassicState } from './classic-state.js';
+import {
+  inspectClassicPlanReadiness,
+  type ClassicPlanReadiness,
+} from './classic-plan-readiness.js';
 
 function result(exitCode: number, message: string): ClassicCommandResult {
   return { exitCode, stderr: message + '\n' };
@@ -90,7 +95,7 @@ async function physicalPathForPossiblyMissingTarget(target: string): Promise<str
 }
 
 async function projectRelative(target: string, projectRoot: string): Promise<string> {
-  const rawCandidate = path.isAbsolute(target) ? target : path.resolve(process.cwd(), target);
+  const rawCandidate = path.isAbsolute(target) ? target : path.resolve(projectRoot, target);
   let candidate = normalized(rawCandidate);
   const rootRelative = relativeToProjectRoot(rawCandidate, projectRoot);
   if (rootRelative !== null) return rootRelative;
@@ -114,6 +119,7 @@ interface GoverningChange {
   phase: ClassicPhase;
   classic: ClassicState | null;
   archived: boolean;
+  invalidState?: boolean;
   superpowersArtifact?: 'matched' | 'unmatched';
   superpowersSlot?: SuperpowersArtifactSlot;
 }
@@ -138,7 +144,7 @@ async function loadGoverningChange(changeDir: string): Promise<GoverningChange |
       classic: projection.classic,
       archived: projection.classic.archived,
     };
-  } catch {
+  } catch (error) {
     // Legacy/partial state without the required Classic fields: fall back to a
     // direct yaml read so the guard still respects the recorded phase rather
     // than crashing the way master's lenient shell scripts did not.
@@ -149,6 +155,7 @@ async function loadGoverningChange(changeDir: string): Promise<GoverningChange |
       phase: legacy.phase,
       classic: null,
       archived: legacy.archived,
+      invalidState: error instanceof Error && error.message.includes('unknown field'),
     };
   }
 }
@@ -182,11 +189,16 @@ async function activeChangesImpl(projectRoot: string): Promise<GoverningChange[]
 const activeChanges = memoizedHookRead('classicActiveChanges', (projectRoot: string) =>
   activeChangesImpl(projectRoot),
 );
+const hookPlanReadiness = memoizedHookRead('classicPlanReadiness', inspectClassicPlanReadiness);
 
 export interface ActiveClassicHookChange {
   workflow: 'classic';
   name: string;
   phase: ClassicPhase;
+}
+
+export interface ClassicHookGuardDependencies {
+  scopeTargets?: typeof scopeCometHookTargets;
 }
 
 export async function listActiveClassicHookChanges(
@@ -269,6 +281,18 @@ function allowsFirstSuperpowersArtifactWrite(
     governing.classic !== null &&
     governing.phase === slot.phase &&
     !superpowersArtifactValue(governing, slot)
+  );
+}
+
+async function allowsSuperpowersArtifactWrite(
+  projectRoot: string,
+  governing: GoverningChange,
+  slot: SuperpowersArtifactSlot,
+): Promise<boolean> {
+  if (allowsFirstSuperpowersArtifactWrite(governing, slot)) return true;
+  if (slot.field !== 'plan' || governing.phase !== 'build') return false;
+  return (
+    (await hookPlanReadiness(projectRoot, governing.classic?.plan ?? null)).status === 'broken'
   );
 }
 
@@ -450,7 +474,11 @@ async function governingChange(
       return slot
         ? {
             ...superpowers.governing,
-            superpowersArtifact: allowsFirstSuperpowersArtifactWrite(superpowers.governing, slot)
+            superpowersArtifact: (await allowsSuperpowersArtifactWrite(
+              projectRoot,
+              superpowers.governing,
+              slot,
+            ))
               ? 'matched'
               : 'unmatched',
             superpowersSlot: slot,
@@ -466,7 +494,7 @@ async function governingChange(
       if (!candidate || 'blockedResult' in candidate) return candidate;
       return {
         ...candidate,
-        superpowersArtifact: allowsFirstSuperpowersArtifactWrite(candidate, slot)
+        superpowersArtifact: (await allowsSuperpowersArtifactWrite(projectRoot, candidate, slot))
           ? 'matched'
           : 'unmatched',
         superpowersSlot: slot,
@@ -585,6 +613,79 @@ function blockedMissingDesignDoc(relativePath: string): ClassicCommandResult {
   );
 }
 
+function blockedPlanNotReady(
+  relativePath: string,
+  governing: GoverningChange,
+  planReadiness: Exclude<ClassicPlanReadiness, { status: 'ready' }>,
+  projectRoot: string,
+  layout: ClassicLayoutPaths,
+): ClassicCommandResult {
+  const name = governingChangeName(governing) ?? '<change-name>';
+  const missing = planReadiness.status === 'missing';
+  const errorCode = missing ? 'classic-build-plan-missing' : 'classic-build-plan-broken';
+  const state = missing
+    ? 'plan is not recorded'
+    : 'the recorded plan path does not resolve to a file';
+  const recorded = missing ? [] : [`RECORDED_PLAN: ${planReadiness.recordedPath}`];
+  const changeDirectory = governing.changeDir
+    ? classicProjectRelative(projectRoot, governing.changeDir)
+    : '<classic-change-dir>';
+  const plansDirectory = classicProjectRelative(projectRoot, layout.superpowersPlansDir);
+  const createCommand = missing
+    ? `comet state set ${name} plan <repository-relative-plan-path>`
+    : `comet state set ${name} plan <new-repository-relative-plan-path>`;
+  const repair = missing
+    ? [
+        '2. Load the Superpowers writing-plans Skill.',
+        `3. Read the Design Doc path from "comet state get ${name} design_doc" and read ${changeDirectory}/tasks.md.`,
+        `4. Create the implementation plan under ${plansDirectory}/.`,
+        '5. Record the plan path:',
+        `   ${createCommand}`,
+      ]
+    : [
+        `2. Restore the plan file at ${planReadiness.recordedPath}, or load the Superpowers writing-plans Skill and create a replacement under ${plansDirectory}/.`,
+        '3. When creating a replacement, record its path:',
+        `   ${createCommand}`,
+      ];
+
+  return result(
+    2,
+    [
+      '',
+      '╔══════════════════════════════════════════╗',
+      '║     COMET PHASE GUARD — WRITE BLOCKED    ║',
+      '╚══════════════════════════════════════════╝',
+      '',
+      `ERROR_CODE: ${errorCode}`,
+      `CHANGE: ${name}`,
+      'WORKFLOW: full',
+      'PHASE: build',
+      `TARGET: ${relativePath}`,
+      `STATE: ${state}`,
+      ...recorded,
+      '',
+      'BLOCKED: project source writes require a ready Superpowers implementation plan.',
+      '',
+      'ALLOWED_RECOVERY_WRITES:',
+      `- ${plansDirectory}/<plan-file>.md`,
+      '- Comet state updates performed by the comet CLI',
+      `- ${changeDirectory} artifacts allowed by the build phase`,
+      '',
+      'RECOVERY:',
+      `1. Invoke /comet-build for ${name} and resume Step 1.`,
+      ...repair,
+      `${missing ? '6' : '4'}. Verify recovery:`,
+      `   comet state check ${name} build --recover`,
+      '',
+      'SUCCESS: plan is reported as DONE and recovery advances beyond plan creation.',
+      `RETRY: retry the original Write/Edit for ${relativePath} only after SUCCESS.`,
+      'PROHIBITED: do not treat tasks.md as the implementation plan or write project source before SUCCESS.',
+      'If writing-plans is unavailable, stop and report the missing Skill instead of bypassing this check.',
+      '',
+    ].join('\n'),
+  );
+}
+
 function blockedUnmatchedSuperpowersArtifact(
   relativePath: string,
   governing: GoverningChange,
@@ -673,7 +774,23 @@ async function inspectClassicHookTarget(
   projectRoot: string,
   target: string,
   selectedChangeName?: string,
+  scopeTargets: typeof scopeCometHookTargets = scopeCometHookTargets,
 ): Promise<ClassicCommandResult> {
+  try {
+    const scoped = await scopeTargets(projectRoot, [target]);
+    if (scoped.projectTargets.length === 0) {
+      return allowed(`${target} (outside guarded project)`);
+    }
+  } catch (error) {
+    return result(
+      2,
+      [
+        `[COMET-HOOK] blocked: scope could not be determined safely for ${target}.`,
+        `REASON: ${error instanceof Error ? error.message : String(error)}`,
+        'NEXT: verify that the project root is accessible, then retry the write.',
+      ].join('\n'),
+    );
+  }
   const relativePath = await projectRelative(target, projectRoot);
   let layout: ClassicLayoutPaths;
   try {
@@ -729,8 +846,20 @@ async function inspectClassicHookTarget(
       return blockedUnmatchedSuperpowersArtifact(relativePath, governing);
     }
   }
+  if (governing.invalidState) {
+    return result(
+      2,
+      `[COMET-HOOK] blocked: active Classic state is invalid; repair .comet.yaml before writing ${relativePath}`,
+    );
+  }
   if (phase === 'build' && governing.classic?.workflow === 'full' && !governing.classic.designDoc) {
     return blockedMissingDesignDoc(relativePath);
+  }
+  if (phase === 'build' && governing.classic?.workflow === 'full') {
+    const planReadiness = await hookPlanReadiness(projectRoot, governing.classic.plan);
+    if (planReadiness.status !== 'ready') {
+      return blockedPlanNotReady(relativePath, governing, planReadiness, projectRoot, layout);
+    }
   }
   if (phase === 'build' || phase === 'verify') {
     return allowed(`${relativePath} (phase: ${phase})`);
@@ -742,6 +871,7 @@ export async function inspectClassicHookGuard(
   projectRoot: string,
   changeName: string,
   request: CometHookRequest,
+  dependencies: ClassicHookGuardDependencies = {},
 ): Promise<CometHookDecision> {
   if (request.intent !== 'non-write') {
     try {
@@ -779,22 +909,9 @@ export async function inspectClassicHookGuard(
     return { allowed: true, reason: 'Hook event is not a write' };
   }
   if (request.intent === 'unknown' || request.targets.length === 0) {
-    if (
-      selected.phase === 'verify' ||
-      (selected.phase === 'build' &&
-        !(selected.classic?.workflow === 'full' && !selected.classic.designDoc))
-    ) {
-      return {
-        allowed: true,
-        reason: `Classic change is in ${selected.phase}`,
-        workflow: 'classic',
-        change: changeName,
-        phase: selected.phase,
-      };
-    }
     return {
-      allowed: false,
-      reason: `Hook write target could not be determined while Classic change ${changeName} is in ${selected.phase}; resume /comet-classic before retrying`,
+      allowed: true,
+      reason: 'Hook write target was not attributed to the guarded project',
       workflow: 'classic',
       change: changeName,
       phase: selected.phase,
@@ -802,7 +919,12 @@ export async function inspectClassicHookGuard(
   }
 
   for (const target of request.targets) {
-    const inspected = await inspectClassicHookTarget(projectRoot, target, changeName);
+    const inspected = await inspectClassicHookTarget(
+      projectRoot,
+      target,
+      changeName,
+      dependencies.scopeTargets,
+    );
     if (inspected.exitCode !== 0) {
       return {
         allowed: false,

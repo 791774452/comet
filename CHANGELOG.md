@@ -2,11 +2,31 @@
 
 All notable changes to @rpamis/comet will be documented in this file.
 
-## What's Changed [0.4.0-beta.15] - 2026-08-02
+## What's Changed [0.4.0-beta.15] - 2026-08-05
+
+### Added
+
+- **Global project activation**: Global Native or Classic defaults can now activate an unconfigured project on its first explicit `/comet` invocation. Project artifacts stay local, existing workflow ownership is preserved, and project-scoped initialization remains available for local overrides.
+- **Native parallel changes**: Before Shape, Native detects active changes and can create an isolated Git worktree automatically. `current`, `branch`, and `worktree` choices remain available when safe, and isolated changes remember their starting target branch for finishing.
+
+### Changed
+
+- **Dashboard change explorer**: Dashboard now loads lightweight change rows, paginates active, archived, and all changes, and fetches full details only for the selected change. Native and Classic keep the selected detail surface stable while loading and offer a retry when detail loading fails, keeping large projects responsive.
+- **Hook lifecycle and routing**: Activated projects and isolated Native worktrees now receive one project-rooted Router automatically. Setup, Update, and Doctor migrate historical global and legacy Comet Hooks while preserving user-owned Hook configuration and reporting incomplete cleanup instead of continuing silently.
 
 ### Fixed
 
-- **Eval Dockerfile hash fallback**: `get_dockerfile_hash()` now falls back to `environment/Dockerfile` when a workspace has no root `Dockerfile`, matching the fallback `docker_build()` already applied. Building or naming an image for an eval workspace that keeps its Dockerfile under `environment/` no longer fails before reaching Docker.
+- **Global Native Skill updates**: Global `comet update` now refreshes the workflows already installed, including Native, without adding workflows the user did not choose.
+- **Native Verify retries**: Invalid verification reports are rejected before the required check runs, and unchanged successful required-check receipts are reused on retry so expensive checks are not repeated unnecessarily.
+- **Native parallel resume**: Ambient Resume now performs full recovery checks only for the explicitly named, selected, or sole Native change, so unrelated active changes do not surface irrelevant Runtime errors.
+- **Subagent workflow dispatch**: Classic Build runs the selected authoring workflow directly, and Comet Any keeps each authoring lane on its designated workflow instead of replacing it based on platform-specific Agent labels.
+- **Native scope consistency**: Native now detects files hidden from Git's modified-file view, preventing false Build-to-Verify scope mismatches from blocking verification and archive.
+- **Hook write handling**: Project Hooks allow ordinary writes when no active Comet change owns the target and remain neutral for unknown or external targets, including paths redirected through symlinks or junctions, while still evaluating in-project writes.
+- **Hook configuration safety**: Hook installation no longer overwrites user-owned Kiro files or leaves invalid Copilot entries, and Doctor now detects stale legacy files and disabled or structurally mismatched handlers before reporting the Router healthy.
+- **Native receipt scope recovery**: Verification receipts now stop before execution when project files changed after Build, report the changed paths, and provide the command for returning to Build and refreshing the implementation scope.
+- **Classic build recovery**: Full Classic workflows return to plan creation after context recovery when no valid implementation plan is recorded, and block project source writes until the plan is restored and linked.
+- **Ambient Resume cleanup**: Disabling Ambient Resume now removes Comet-managed instructions from `AGENTS.md` and `CLAUDE.md` while preserving user-authored content.
+- **Eval workspace Dockerfiles**: Eval image preparation now uses `environment/Dockerfile` when a workspace has no root Dockerfile, so those workspaces can build without moving the file.
 
 ## What's Changed [0.4.0-beta.14] - 2026-08-02
 

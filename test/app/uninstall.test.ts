@@ -261,8 +261,16 @@ describe('uninstall', () => {
     const hooksDir = path.join(tmpDir, '.kiro', 'hooks');
     const managedHook = path.join(hooksDir, 'comet-hook-router.kiro.hook');
     const userHook = path.join(hooksDir, 'personal.kiro.hook');
+    const managedHookContent =
+      JSON.stringify({
+        enabled: true,
+        then: {
+          type: 'runCommand',
+          command: 'node .agents/skills/comet/scripts/comet-hook-router.mjs --platform kiro',
+        },
+      }) + '\n';
     await fs.mkdir(hooksDir, { recursive: true });
-    await fs.writeFile(managedHook, '{}\n');
+    await fs.writeFile(managedHook, managedHookContent);
     await fs.writeFile(userHook, '{}\n');
     const unlink = fs.unlink.bind(fs);
     const permissionError = Object.assign(new Error('permission denied'), { code: 'EACCES' });
@@ -280,7 +288,7 @@ describe('uninstall', () => {
       unlinkSpy.mockRestore();
     }
 
-    await expect(fs.readFile(managedHook, 'utf8')).resolves.toBe('{}\n');
+    await expect(fs.readFile(managedHook, 'utf8')).resolves.toBe(managedHookContent);
     await expect(fs.readFile(userHook, 'utf8')).resolves.toBe('{}\n');
   });
 
@@ -720,7 +728,7 @@ describe('uninstall', () => {
       expect(cleaned.hooks.PreToolUse[0].hooks).toEqual([]);
     });
 
-    it('continues Codex cleanup across files and counts only canonical write failures', async () => {
+    it('continues Codex cleanup across files and counts every write failure', async () => {
       const codex = {
         ...PLATFORMS.find((platform) => platform.id === 'codex')!,
         legacyHookConfigFiles: ['settings.local.json', 'settings.backup.json'],
@@ -756,7 +764,7 @@ describe('uninstall', () => {
 
       const result = await removeCometHooksForPlatform(tmpDir, codex, 'project');
 
-      expect(result).toEqual({ removed: 1, failed: 1 });
+      expect(result).toEqual({ removed: 1, failed: 2 });
       const unchangedCanonical = JSON.parse(await fs.readFile(canonicalPath, 'utf8'));
       expect(unchangedCanonical.hooks.PreToolUse[0].hooks).toEqual([cometHandler, userHandler]);
       const cleanedLegacy = JSON.parse(await fs.readFile(legacyPath, 'utf8'));
@@ -833,34 +841,75 @@ describe('uninstall', () => {
       expect(updated.hooks.PreToolUse).toEqual(settings.hooks.PreToolUse);
     });
 
-    it('removes Copilot hook file', async () => {
+    it('removes only managed Copilot entries while preserving user config', async () => {
       const copilotPlatform: Platform = PLATFORMS.find((p) => p.id === 'github-copilot')!;
 
       const hooksDir = path.join(tmpDir, '.github', 'hooks');
       await fs.mkdir(hooksDir, { recursive: true });
       const hookFilePath = path.join(hooksDir, 'comet-guard.json');
-      await fs.writeFile(hookFilePath, JSON.stringify({ version: 1 }), 'utf-8');
+      await installCometHooksForPlatform(tmpDir, copilotPlatform, 'project');
+      const config = JSON.parse(await fs.readFile(hookFilePath, 'utf8')) as {
+        version: number;
+        hooks: { preToolUse: Array<Record<string, unknown>> };
+      };
+      config.customSetting = 'keep';
+      config.hooks.preToolUse.push({ matcher: '*', bash: 'node user-hook.mjs' });
+      await fs.writeFile(hookFilePath, JSON.stringify(config, null, 2), 'utf-8');
 
       expect(await fileExists(hookFilePath)).toBe(true);
 
       const result = await removeCometHooksForPlatform(tmpDir, copilotPlatform, 'project');
       expect(result.removed).toBe(1);
-      expect(await fileExists(hookFilePath)).toBe(false);
+      expect(await fs.readFile(hookFilePath, 'utf8')).toContain('customSetting');
+      const cleaned = JSON.parse(await fs.readFile(hookFilePath, 'utf8')) as {
+        customSetting: string;
+        hooks: { preToolUse: Array<Record<string, unknown>> };
+      };
+      expect(cleaned.hooks.preToolUse).toEqual([{ matcher: '*', bash: 'node user-hook.mjs' }]);
+      expect(cleaned.customSetting).toBe('keep');
     });
 
-    it('removes Kiro hook files', async () => {
+    it('removes only Kiro hook files that contain a managed command', async () => {
       const kiroPlatform: Platform = PLATFORMS.find((p) => p.id === 'kiro')!;
 
       const hooksDir = path.join(tmpDir, '.kiro', 'hooks');
       await fs.mkdir(hooksDir, { recursive: true });
       const hookFilePath = path.join(hooksDir, 'comet-hook-guard.kiro.hook');
-      await fs.writeFile(hookFilePath, JSON.stringify({ enabled: true }), 'utf-8');
+      await fs.writeFile(
+        hookFilePath,
+        JSON.stringify({
+          enabled: true,
+          then: {
+            type: 'runCommand',
+            command: 'node .agents/skills/comet/scripts/comet-hook-guard.mjs --platform kiro',
+          },
+        }),
+        'utf8',
+      );
 
       expect(await fileExists(hookFilePath)).toBe(true);
 
       const result = await removeCometHooksForPlatform(tmpDir, kiroPlatform, 'project');
       expect(result.removed).toBe(1);
       expect(await fileExists(hookFilePath)).toBe(false);
+    });
+
+    it('preserves an unmanaged Kiro hook that reuses a Comet filename', async () => {
+      const kiroPlatform: Platform = PLATFORMS.find((p) => p.id === 'kiro')!;
+      const hooksDir = path.join(tmpDir, '.kiro', 'hooks');
+      const hookFilePath = path.join(hooksDir, 'comet-hook-router.kiro.hook');
+      const userConfig = {
+        enabled: true,
+        then: { type: 'runCommand', command: 'node user-hook.mjs' },
+      };
+      await fs.mkdir(hooksDir, { recursive: true });
+      await fs.writeFile(hookFilePath, JSON.stringify(userConfig), 'utf8');
+
+      await expect(removeCometHooksForPlatform(tmpDir, kiroPlatform, 'project')).resolves.toEqual({
+        removed: 0,
+        failed: 0,
+      });
+      await expect(fs.readFile(hookFilePath, 'utf8')).resolves.toBe(JSON.stringify(userConfig));
     });
 
     it('skips platforms without hooks support', async () => {
