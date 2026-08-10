@@ -2,17 +2,33 @@
 
 All notable changes to @rpamis/comet will be documented in this file.
 
-## What's Changed [0.4.0-beta.18] - 2026-08-07
+## What's Changed [0.4.0-beta.17] - 2026-08-10
 
 ### Added
 
+- **Independent Native verification**: After a Builder submits a candidate, Comet runs the declared local checks and coordinates a fresh read-only Verifier over every acceptance item. Failed items return to Build through a bounded loop; the packaged Skill-coordinated flow requires one explicit user confirmation before Archive.
 - **Trae Hook support**: `comet init`, `comet update`, `comet doctor`, and `comet uninstall` now support managed Hook Router entries for Trae and Trae CN, using Trae's official project and global `hooks.json` locations while preserving user-owned Hook configuration.
 
-## What's Changed [0.4.0-beta.17] - 2026-08-05
+### Changed
+
+- **Faster Native completion loop**: New Native changes no longer scan or fingerprint the project during Verify, create per-item receipts, or repeat checks during Archive. Each normal check runs once, stdout and stderr stream to local logs, and long Maven, Gradle, npm, or Python output no longer invalidates an otherwise valid result.
+- **Portable Native recovery**: `comet-state.yaml` now records the stable phase, loop, handoff, blockers, checks, and verification summary needed by a new Agent on another synchronized device. `verification.md` is a rebuildable user report, while in-flight execution and logs remain device-local.
+- **Native Dashboard workflow view**: Native details now show Build/Verify stage, iteration, attempt, acceptance outcomes, checks, blockers, and compact history directly from portable state; archived legacy changes remain available through a read-only adapter.
+- **Native artifact previews**: Native details now preview the portable `comet-state.yaml`, brief, complete target Specs, and generated verification report while keeping machine-only Runtime files out of the artifact list.
+- **Native clarification and workspace flow**: Batch clarification is now the default for new projects, dependent decisions are mapped before asking, and branch/worktree changes keep structured creation, discovery, recovery, and authorized finish actions.
+- **Native command guidance**: Public commands and bilingual Skills now keep normal progression on Runtime continuation, explain the bounded Build/Verify loop, and load workspace, command-exception, or recovery details only when needed without exposing machine-only state files.
+- **Codex Skill invocation policy**: User-facing phase and preset Skills now include display metadata and require explicit invocation, while permanent workflow entry Skills remain available for model routing.
 
 ### Fixed
 
+- **Native worktree and recovery routing**: Commands keep linked worktrees authoritative, discover portable changes across registered worktrees, reject migration from the wrong checkout, and resume interrupted Archive steps without silently reusing an unverifiable pass.
+- **Cross-platform Native checks**: Windows projects can run common command shims such as npm and pnpm without shell-specific failures, while timed-out checks are stopped as a process tree instead of leaving child processes behind.
+- **Workflow isolation and references**: Legacy global Hooks remain neutral outside the active project, and Classic-only reference documents stay scoped to Classic installations.
 - **Doctor Superpowers detection**: `comet doctor` now recognizes Claude Code plugin-managed Superpowers installs, so users with Superpowers under the plugin cache no longer receive a misleading install warning.
+
+### Removed
+
+- **Native verification bookkeeping**: New Native changes no longer expose the old project-wide scan settings or public checkpoint/check/evidence/receipt command chain. Legacy active changes migrate conservatively, and archived legacy changes remain read-only.
 
 ## What's Changed [0.4.0-beta.16] - 2026-08-05
 

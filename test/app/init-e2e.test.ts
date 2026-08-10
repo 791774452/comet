@@ -345,7 +345,11 @@ describe('comet init E2E', () => {
       const projectConfig = await fs.readFile(path.join(tmpDir, '.comet', 'config.yaml'), 'utf8');
       expect(projectConfig).toContain('default_workflow: native');
       expect(projectConfig).toContain('artifact_root: docs');
-      expect(projectConfig).toContain('clarification_mode: sequential');
+      expect(projectConfig).toContain('clarification_mode: batch');
+      expect(projectConfig).not.toMatch(/^\s+snapshot:/mu);
+      await expect(fs.readFile(path.join(tmpDir, '.gitignore'), 'utf8')).resolves.toContain(
+        '!/.comet/config.yaml',
+      );
       expect(mockedExecFileSync.mock.calls.some((call) => String(call[0]) === 'openspec')).toBe(
         false,
       );
@@ -478,7 +482,7 @@ describe('comet init E2E', () => {
     expect(config).toContain('default_workflow: native');
     expect(config).toContain('- native');
     expect(config).toContain('- classic');
-    expect(config).toContain('clarification_mode: sequential');
+    expect(config).toContain('clarification_mode: batch');
     await expect(fs.stat(path.join(tmpDir, 'docs', 'comet', 'changes'))).resolves.toBeDefined();
     await expect(fs.stat(path.join(tmpDir, 'docs', 'superpowers', 'specs'))).resolves.toBeDefined();
     await expect(
@@ -557,7 +561,7 @@ describe('comet init E2E', () => {
     });
   });
 
-  it('repairs missing Native defaults while initializing Both over a legacy Classic root', async () => {
+  it('repairs missing Native defaults and removes legacy snapshot config while initializing Both', async () => {
     mockExternalSuccess();
     await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
     await fs.mkdir(path.join(tmpDir, 'openspec', 'changes', 'archive'), { recursive: true });
@@ -570,6 +574,10 @@ describe('comet init E2E', () => {
         'workflows: [native]',
         'native:',
         '  language: en',
+        '  snapshot:',
+        '    include: ["**/*"]',
+        '    exclude:',
+        '      - custom/init-generated/**',
         '',
       ].join('\n'),
       'utf8',
@@ -593,10 +601,11 @@ describe('comet init E2E', () => {
       projectConfigUpdated: true,
     });
     const config = parse(await fs.readFile(path.join(tmpDir, '.comet', 'config.yaml'), 'utf8')) as {
-      native?: { artifact_root?: string };
+      native?: { artifact_root?: string; snapshot?: unknown };
       classic?: { artifact_layout?: string };
     };
     expect(config.native?.artifact_root).toBe('docs');
+    expect(config.native?.snapshot).toBeUndefined();
     expect(config.classic?.artifact_layout).toBe('legacy');
     await expect(fs.stat(path.join(tmpDir, 'openspec', 'config.yaml'))).resolves.toBeDefined();
     await expect(fs.access(path.join(tmpDir, 'docs', 'openspec'))).rejects.toMatchObject({
@@ -1544,6 +1553,9 @@ describe('comet init E2E', () => {
     await expect(
       fs.readFile(path.join(os.homedir(), '.comet', 'config.yaml'), 'utf8'),
     ).resolves.toContain('artifact_root: artifacts');
+    await expect(
+      fs.readFile(path.join(os.homedir(), '.comet', 'config.yaml'), 'utf8'),
+    ).resolves.not.toMatch(/^\s+snapshot:/mu);
     await expect(fs.access(path.join(os.homedir(), 'artifacts', 'comet'))).rejects.toThrow();
     await expect(fs.access(path.join(tmpDir, '.comet', 'config.yaml'))).rejects.toThrow();
   });
@@ -1562,6 +1574,10 @@ describe('comet init E2E', () => {
         'ambient_resume: false',
         'native:',
         '  artifact_root: docs',
+        '  snapshot:',
+        '    include: ["**/*"]',
+        '    exclude:',
+        '      - custom/global-generated/**',
         '',
       ].join('\n'),
     );
@@ -1583,7 +1599,11 @@ describe('comet init E2E', () => {
 
     await expect(
       fs.readFile(path.join(fakeHome, '.comet', 'config.yaml'), 'utf8'),
-    ).resolves.toContain('ambient_resume: false');
+    ).resolves.toMatch(/ambient_resume: false/);
+    const globalConfig = parse(
+      await fs.readFile(path.join(fakeHome, '.comet', 'config.yaml'), 'utf8'),
+    ) as { native: { snapshot?: unknown } };
+    expect(globalConfig.native.snapshot).toBeUndefined();
   });
 
   it('does not publish a global Classic default when OpenSpec initialization fails', async () => {

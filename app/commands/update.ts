@@ -65,6 +65,7 @@ import { assertClassicOpenSpecRootHealthy } from '../../domains/comet-classic/cl
 import { discoverNativeProject } from '../../domains/comet-native/native-paths.js';
 import { defaultProjectConfig } from '../../domains/comet-native/native-config.js';
 import { readWorkflowProjectConfigSnapshot } from '../../domains/workflow-contract/project-config-reader.js';
+import { ensureCometProjectGitignore } from '../../domains/workflow-contract/project-gitignore.js';
 import {
   readWorkflowGlobalConfig,
   writeWorkflowGlobalConfig,
@@ -106,7 +107,9 @@ async function refreshGlobalWorkflowConfig(
   const existing = await readWorkflowGlobalConfig(homeDir);
   const defaults = defaultProjectConfig('docs', language ?? 'en');
   const config = existing ?? { ...defaults, schema: 'comet.global.v1' as const };
-  if (language && config.native) config.native.language = language;
+  if (config.native) {
+    if (language) config.native.language = language;
+  }
   if (language && config.classic) config.classic.language = language;
   await writeWorkflowGlobalConfig(homeDir, config);
 }
@@ -1412,6 +1415,7 @@ async function updateSingleProject(
       true,
       classicProject,
     );
+    if (nativeProject) await ensureCometProjectGitignore(projectPath);
     log(`  ${t(lang, 'configMerged')}`);
   };
 
@@ -2017,6 +2021,7 @@ async function updateSingleProject(
         true,
         classicProject,
       );
+      if (nativeProject) await ensureCometProjectGitignore(configRoot);
     }
     if (scope === 'project' && classicLayoutInitializationPermit) {
       await completeClassicLayoutInitialization(projectPath, classicLayoutInitializationPermit);

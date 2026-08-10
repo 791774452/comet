@@ -3,7 +3,10 @@ import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { nativeProjectPaths } from '../../../domains/comet-native/native-paths.js';
+import {
+  ensureNativeDirectories,
+  nativeProjectPaths,
+} from '../../../domains/comet-native/native-paths.js';
 import {
   applyNativeTransaction,
   appendNativeTransactionEvent,
@@ -26,6 +29,7 @@ describe('Native transaction schema', () => {
   beforeEach(async () => {
     projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'comet-native-transaction-'));
     paths = await nativeProjectPaths(projectRoot, '.');
+    await ensureNativeDirectories(paths);
     journal = {
       schema: 'comet.native.transaction.v1',
       id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
@@ -56,6 +60,28 @@ describe('Native transaction schema', () => {
     expect(await readNativeTransactionEvents(paths, journal.id)).toEqual([
       expect.objectContaining({ sequence: 1, type: 'prepared' }),
     ]);
+  });
+
+  it('does not resolve the exact Runtime root under the Native artifact root', async () => {
+    const source = path.join(paths.runtimeDir, 'staged-change');
+    await fs.mkdir(source, { recursive: true });
+    const rootMove = {
+      ...journal,
+      operations: [
+        {
+          id: 'move-runtime-root',
+          type: 'move' as const,
+          source: 'runtime/staged-change',
+          target: 'runtime',
+        },
+      ],
+    };
+    await createNativeTransaction(paths, rootMove);
+
+    await expect(applyNativeTransaction(paths, rootMove)).rejects.toThrow(
+      'Move target already exists: runtime',
+    );
+    await expect(fs.stat(source)).resolves.toBeDefined();
   });
 
   it.each([
@@ -252,7 +278,10 @@ describe('Native transaction schema', () => {
 
   it('copies legacy staged bytes without UTF-8 coercion', async () => {
     await createNativeTransaction(paths, journal);
-    const staged = path.join(paths.nativeRoot, journal.operations[0].staged!);
+    const staged = path.join(
+      paths.runtimeDir,
+      journal.operations[0].staged!.slice('runtime/'.length),
+    );
     const target = path.join(paths.nativeRoot, journal.operations[0].target);
     const bytes = Buffer.from([0xff, 0x00, 0x80, 0x41]);
     await fs.writeFile(staged, bytes);
@@ -264,7 +293,10 @@ describe('Native transaction schema', () => {
 
   it('rejects an oversized legacy staged object before loading or copying it', async () => {
     await createNativeTransaction(paths, journal);
-    const staged = path.join(paths.nativeRoot, journal.operations[0].staged!);
+    const staged = path.join(
+      paths.runtimeDir,
+      journal.operations[0].staged!.slice('runtime/'.length),
+    );
     await fs.writeFile(staged, 'x');
     await fs.truncate(staged, 64 * 1024 * 1024 + 1);
 

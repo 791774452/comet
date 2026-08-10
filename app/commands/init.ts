@@ -61,6 +61,7 @@ import {
   readWorkflowProjectConfigSnapshot,
 } from '../../domains/workflow-contract/project-config-reader.js';
 import { writeWorkflowProjectConfig } from '../../domains/workflow-contract/project-config-writer.js';
+import { ensureCometProjectGitignore } from '../../domains/workflow-contract/project-gitignore.js';
 import {
   readWorkflowGlobalConfig,
   writeWorkflowGlobalConfig,
@@ -1230,6 +1231,7 @@ export async function initCommand(
             classicLayoutInitializationPermit,
           );
         }
+        await ensureCometProjectGitignore(projectPath);
         await writeWorkflowProjectConfig(projectPath, config, {
           expectedIdentity: initialProjectConfigSnapshot?.identity,
         });
@@ -1252,7 +1254,13 @@ export async function initCommand(
         default_workflow: workflow,
         workflows: [...selectedWorkflows],
         ambient_resume: existingGlobalConfig?.ambient_resume ?? true,
-        ...(includesWorkflow(workflowSelection, 'native') ? { native: defaults.native } : {}),
+        ...(includesWorkflow(workflowSelection, 'native')
+          ? {
+              native: existingGlobalConfig?.native
+                ? { ...existingGlobalConfig.native }
+                : defaults.native,
+            }
+          : {}),
         ...(includesWorkflow(workflowSelection, 'classic')
           ? {
               classic: {

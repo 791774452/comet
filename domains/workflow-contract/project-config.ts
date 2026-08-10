@@ -59,9 +59,74 @@ const DEFAULT_WORKFLOW_NATIVE_MANAGED_SKILL_EXCLUDES = [
   '.zcode/skills/**',
 ] as const;
 
+// Native snapshots describe source and project intent, not dependency trees,
+// IDE metadata, caches, test output, or compiler output. The generated-path
+// defaults below apply at every directory depth so monorepos do not pull
+// generated folders into a baseline just because they are nested below the
+// project root.
+const DEFAULT_WORKFLOW_NATIVE_GENERATED_EXCLUDES = [
+  '**/.idea/**',
+  '**/.vscode/**',
+  '.codex/skills/**',
+  '**/node_modules/**',
+  '**/.next/**',
+  '**/.nuxt/**',
+  '**/.output/**',
+  '**/.svelte-kit/**',
+  '**/.vite/**',
+  '**/.parcel-cache/**',
+  '**/.turbo/**',
+  '**/.nx/cache/**',
+  '**/dist/**',
+  '**/build/**',
+  '**/out/**',
+  '**/coverage/**',
+  '**/.nyc_output/**',
+  '**/target/**',
+  '**/.gradle/**',
+  '**/.cxx/**',
+  '**/.externalNativeBuild/**',
+  '**/captures/**',
+  '**/__pycache__/**',
+  '**/.pytest_cache/**',
+  '**/.mypy_cache/**',
+  '**/.ruff_cache/**',
+  '**/.tox/**',
+  '**/.nox/**',
+  '**/.venv/**',
+  '**/venv/**',
+  '**/obj/**',
+  '**/CMakeFiles/**',
+  '**/cmake-build-*/**',
+  '**/.cache/**',
+  '**/tmp/**',
+  '**/temp/**',
+  '**/logs/**',
+  '**/*.tsbuildinfo',
+  '**/*.log',
+  '**/.DS_Store',
+  '**/Thumbs.db',
+] as const;
+
+export const DEFAULT_WORKFLOW_NATIVE_SNAPSHOT_EXCLUDES = [
+  ...DEFAULT_WORKFLOW_NATIVE_MANAGED_SKILL_EXCLUDES,
+  ...DEFAULT_WORKFLOW_NATIVE_GENERATED_EXCLUDES,
+].sort((left, right) => left.localeCompare(right, 'en'));
+
+export function mergeWorkflowNativeSnapshotExcludes(exclude: readonly string[]): string[] {
+  const merged = [...exclude];
+  const seen = new Set(exclude);
+  for (const pattern of DEFAULT_WORKFLOW_NATIVE_SNAPSHOT_EXCLUDES) {
+    if (seen.has(pattern)) continue;
+    seen.add(pattern);
+    merged.push(pattern);
+  }
+  return merged;
+}
+
 export const DEFAULT_WORKFLOW_NATIVE_SNAPSHOT_CONFIG: WorkflowNativeSnapshotConfig = {
   include: ['**/*'],
-  exclude: [...DEFAULT_WORKFLOW_NATIVE_MANAGED_SKILL_EXCLUDES],
+  exclude: [...DEFAULT_WORKFLOW_NATIVE_SNAPSHOT_EXCLUDES],
   max_files: 10_000,
   max_total_bytes: 256 * 1024 * 1024,
   max_duration_ms: 60_000,
@@ -100,15 +165,15 @@ const COMMENTS: Record<ProjectConfigCommentLanguage, Record<ProjectConfigComment
       '# Enables automatic recovery through the read-only Ambient Resume probe for both Native and Classic. Set false to disable it.\n# ambient_resume: true | false',
     native: '# Native workflow settings. They do not change Classic state or behavior.',
     'native.artifact_root':
-      '# Root directory where Native stores Comet specs, changes, and runtime data.',
+      '# Root directory where Native stores Comet specs and changes. Runtime data stays under .comet.',
     'native.language':
       '# Artifact language used by Native workflow documents.\n# language: en | zh-CN',
     'native.clarification_mode':
-      '# Controls whether Native asks one clarification at a time or every currently answerable question in a round.\n# clarification_mode: sequential | batch',
+      '# Controls how Native asks clarifying questions: batch asks every currently answerable question per round (default), sequential asks one at a time.\n# clarification_mode: batch | sequential',
     'native.archive_confirmation':
       '# Controls whether Native archives automatically after a successful preview or waits for explicit user confirmation.\n# archive_confirmation: automatic | required',
     'native.max_verify_failures':
-      '# Maximum failed Verify outcomes allowed for one confirmed contract before Native stops the completion loop.',
+      '# Maximum failed Verify outcomes allowed for one confirmed acceptance target before Native stops the completion loop.',
     'native.snapshot':
       '# Controls the auditable project scope and bounded work used by Native content snapshots.',
     'native.snapshot.include':
@@ -140,14 +205,14 @@ const COMMENTS: Record<ProjectConfigCommentLanguage, Record<ProjectConfigComment
     ambient_resume:
       '# 是否启用只读的环境感知恢复探针，同时作用于 Native 和 Classic；设为 false 可关闭自动工作流恢复。\n# ambient_resume: true | false',
     native: '# Native 工作流配置，不会改变 Classic 的状态或行为。',
-    'native.artifact_root': '# Native 产物的存放根目录，包括规格、change 和运行时数据。',
+    'native.artifact_root': '# Native 规格和 change 的存放根目录；运行时数据始终位于 .comet。',
     'native.language': '# Native 工作流文档使用的产物语言。\n# 可选值：en | zh-CN',
     'native.clarification_mode':
-      '# Native 每轮询问一个问题，或一次提出当前所有可回答的问题。\n# 可选值：sequential | batch',
+      '# Native 提问澄清问题的方式：batch 每轮一次提出当前所有可回答的问题（默认），sequential 每轮只问一个。\n# 可选值：batch | sequential',
     'native.archive_confirmation':
-      '# Native 归档预演成功后自动归档，或等待用户明确确认。\n# 可选值：automatic | required',
+      '# Native 归档检查成功后自动归档，或等待用户明确确认。\n# 可选值：automatic | required',
     'native.max_verify_failures':
-      '# 同一份已确认 contract 最多允许的 Verify 失败次数；达到上限后停止完成循环。',
+      '# 同一个已确认验收目标最多允许的 Verify 失败次数；达到上限后停止完成循环。',
     'native.snapshot': '# Native 内容快照使用的可审计项目范围与有界工作预算。',
     'native.snapshot.include': '# Native 快照纳入的项目相对路径；模式使用 /，支持 *、** 和 ?。',
     'native.snapshot.exclude': '# 从纳入范围中排除路径；新 change 会把排除策略绑定到 baseline。',
@@ -463,7 +528,7 @@ function normalizeWorkflowNativeProjectConfig(
   if (typeof artifactRoot !== 'string') {
     throw new Error('native.artifact_root must be a string');
   }
-  const clarificationMode = native.clarification_mode ?? 'sequential';
+  const clarificationMode = native.clarification_mode ?? 'batch';
   if (clarificationMode !== 'sequential' && clarificationMode !== 'batch') {
     throw new Error('native.clarification_mode must be sequential or batch');
   }
@@ -643,7 +708,6 @@ export function workflowProjectConfigManagedValue(
             clarification_mode: config.native.clarification_mode,
             archive_confirmation: config.native.archive_confirmation,
             max_verify_failures: config.native.max_verify_failures,
-            snapshot: config.native.snapshot,
             ...(config.native.pending_root_move
               ? {
                   pending_root_move: workflowPendingRootMoveValue(config.native.pending_root_move),
@@ -688,7 +752,6 @@ export function mergeWorkflowProjectConfigDocument(
   };
   if (validated.native) {
     const existingNative = optionalRecord(existing.native);
-    const existingSnapshot = optionalRecord(existingNative.snapshot);
     const native: Record<string, unknown> = {
       ...existingNative,
       artifact_root: validated.native.artifact_root,
@@ -696,11 +759,10 @@ export function mergeWorkflowProjectConfigDocument(
       clarification_mode: validated.native.clarification_mode,
       archive_confirmation: validated.native.archive_confirmation,
       max_verify_failures: validated.native.max_verify_failures,
-      snapshot: {
-        ...existingSnapshot,
-        ...validated.native.snapshot,
-      },
     };
+    // Snapshot settings are retained by the parser as a legacy v1-v3 runtime
+    // default, but Native v4 no longer persists them in user configuration.
+    delete native.snapshot;
     if (validated.native.pending_root_move) {
       const existingPending = optionalRecord(existingNative.pending_root_move);
       const pending = workflowPendingRootMoveValue(validated.native.pending_root_move);
@@ -740,7 +802,7 @@ export function defaultWorkflowProjectConfig(
     native: {
       artifact_root: normalizeWorkflowArtifactRoot(artifactRoot),
       language,
-      clarification_mode: 'sequential',
+      clarification_mode: 'batch',
       archive_confirmation: 'automatic',
       max_verify_failures: DEFAULT_WORKFLOW_NATIVE_MAX_VERIFY_FAILURES,
       snapshot: {
@@ -1668,7 +1730,7 @@ function managedWorkflowConfigFields(source) {
     }
     nativeArtifactRoot = normalizeWorkflowArtifactRoot(native.artifact_root);
     workflowConfigLanguage(native.language, 'en', 'native.language');
-    const clarificationMode = native.clarification_mode ?? 'sequential';
+    const clarificationMode = native.clarification_mode ?? 'batch';
     if (clarificationMode !== 'sequential' && clarificationMode !== 'batch') {
       throw new Error('native.clarification_mode must be sequential or batch');
     }
