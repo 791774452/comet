@@ -8,6 +8,7 @@ All notable changes to @rpamis/comet will be documented in this file.
 
 - **Dashboard artifact previews**: Fullscreen previews now close with Escape, keep long tables horizontally scrollable, preserve readable table headers, and use a larger directory navigation scale.
 - **Hook allow-path documentation**: The website now explains how to configure project-relative `hook.allow_paths` directories for guarded workflow phases.
+- **On-demand change review**: The new `/comet-review` Skill reviews the current Native or Classic change against its implementation diff and existing evidence, reports prioritized correctness, security, edge-case, and coverage findings, and remains read-only without advancing or replacing Verify.
 
 ### Fixed
 
