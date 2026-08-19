@@ -6,6 +6,7 @@ All notable changes to @rpamis/comet will be documented in this file.
 
 ### Added
 
+- **Grok platform support**: `comet init`, `comet update`, `comet doctor`, and `comet uninstall` now treat Grok as a first-class host. Skills, rules, and the Hook Router live under `.grok/skills/`, `.grok/rules/`, and `.grok/hooks/comet.json`. The Router recognizes `--platform grok` and matches Grok's native `write` / `search_replace` tools.
 - **Repository-owned Native pull-request finish providers**: Projects can opt into a structured repository command for PR title, body, template, and policy validation while Comet retains commit, push, remote base/head/SHA verification, existing-PR reuse, recoverable failure state, and safe worktree cleanup.
 
 ### Changed
