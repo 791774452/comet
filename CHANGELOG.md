@@ -18,6 +18,7 @@ All notable changes to @rpamis/comet will be documented in this file.
 ### Fixed
 
 - **Windows Eval skill copies**: `comet eval` no longer copies the framework's own `.comet` runtime state into test sandboxes and artifact snapshots, preventing nested-cache `MAX_PATH` failures on Windows.
+- **Classic design handoff refresh after Spec Patch**: Running `comet handoff <change> design --write` after OpenSpec artifacts changed no longer fails with a stale-handoff error, so the design guard can pass and the Classic full workflow proceeds from Design to Build. Refreshing now rewrites stale context files even when a manually aligned hash would otherwise short-circuit success, regenerates the context pack when OpenSpec delta specs are added, changed, or removed, and remains available after the guard has advanced the phase to build.
 - **Classic Ambient Resume**: `comet init` and `comet update` now keep the managed Ambient Resume instructions for Classic-only projects when `ambient_resume` is enabled, so re-running the commands no longer removes the block from `AGENTS.md` or `CLAUDE.md`.
 - **Fork pull request greetings**: First-time contributors now receive the repository guidance comment when opening a pull request from a fork, without weakening the read-only permissions of workflows that execute contributor code.
 - **Pull request template checks**: Pull requests now receive an actionable comment and a failing check when items from the repository template are missing or its checklist is incomplete.
