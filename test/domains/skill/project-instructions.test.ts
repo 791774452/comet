@@ -82,6 +82,22 @@ describe('Comet project instructions', () => {
   });
 
   it.each([
+    ['zh' as const, '非 Comet 的 Skill 或斜杠命令', '不要运行 resume probe，直接执行该 Skill'],
+    [
+      'en' as const,
+      'non-Comet skill or slash command through the host',
+      'execute the invoked skill directly',
+    ],
+  ])('exempts explicit non-Comet skill invocations in %s', async (language, ...markers) => {
+    await installCometProjectInstructions(tmpDir, language);
+
+    const content = await fs.readFile(path.join(tmpDir, 'AGENTS.md'), 'utf8');
+    for (const marker of markers) {
+      expect(content).toContain(marker);
+    }
+  });
+
+  it.each([
     [
       'zh' as const,
       '正在等待用户回复你在流程中提出的问题',
