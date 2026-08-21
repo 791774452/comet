@@ -31,7 +31,7 @@ import {
   withProjectContext,
 } from './classic-command-context.js';
 import { resolveClassicStepId } from './classic-resolver.js';
-import { transitionClassicRuntimeRun, validateClassicRuntimeRun } from './classic-runtime-run.js';
+import { reconcileClassicRuntimeRun, transitionClassicRuntimeRun } from './classic-runtime-run.js';
 import { appendClassicStateEvent } from './classic-state-events.js';
 import {
   CLASSIC_WIRE_KEYS,
@@ -1411,8 +1411,15 @@ async function recordCheck(
     if (!projection.classic || !projection.run) {
       throw new Error('command checks require an existing synchronized Classic Run');
     }
-    const { run } = await validateClassicRuntimeRun(directory, projection);
-    const recorded = await recordCommandCheck(projectRoot, directory, run, {
+    const reconciliation = await reconcileClassicRuntimeRun(directory, projection);
+    if (reconciliation.reconciled && reconciliation.fromStep !== null) {
+      output.stderr.push(
+        green(
+          `[RECONCILED] currentStep ${reconciliation.fromStep} -> ${reconciliation.context.run.currentStep}`,
+        ),
+      );
+    }
+    const recorded = await recordCommandCheck(projectRoot, directory, reconciliation.context.run, {
       scope: scopeText as CommandCheckScope,
       ...options,
       cwd:
