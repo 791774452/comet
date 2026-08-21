@@ -2,28 +2,39 @@
 
 All notable changes to @rpamis/comet will be documented in this file.
 
-## What's Changed [0.4.0-beta.19] - 2026-08-20
+## What's Changed [0.4.0-beta.19] - 2026-08-16
 
 ### Added
 
 - **Grok platform support**: `comet init`, `comet update`, `comet doctor`, and `comet uninstall` now treat Grok as a first-class host. Skills, rules, and the Hook Router live under `.grok/skills/`, `.grok/rules/`, and `.grok/hooks/comet.json`. The Router recognizes `--platform grok` and matches Grok's native `write` / `search_replace` tools.
 - **Repository-owned Native pull-request finish providers**: Projects can opt into a structured repository command for PR title, body, template, and policy validation while Comet retains commit, push, remote base/head/SHA verification, existing-PR reuse, recoverable failure state, and safe worktree cleanup.
+- **CodeBuddy rules support**: Comet now installs and refreshes Markdown workflow rules in CodeBuddy's `.codebuddy/rules/` directory.
+- **On-demand change review**: The new `/comet-review` Skill reviews the current Native or Classic change against its implementation diff and existing evidence, reports prioritized correctness, security, edge-case, and coverage findings, and remains read-only without advancing or replacing Verify.
+- **Fork pull request guidance**: First-time contributors opening pull requests from forks now receive the repository guidance comment through a trusted workflow.
+- **Pull request template validation**: Pull requests now receive an actionable comment and a failing check when required template sections or items are missing, or when checklist items are incomplete.
+- **Issue triage labels**: New issues are automatically marked for triage and assigned a repository area label from their structured issue form selection.
 
 ### Changed
 
-- **Dashboard artifact previews**: Fullscreen previews now close with Escape, keep long tables horizontally scrollable, preserve readable table headers, and use a larger directory navigation scale.
 - **Hook allow-path documentation**: The website now explains how to configure project-relative `hook.allow_paths` directories for guarded workflow phases.
+- **Native child plans**: New Supervisor Change child plans keep a readable parent acceptance index, while Runtime verification still retains the complete brief-and-Spec acceptance matrix; historical child-plan files remain compatible.
+- **Dashboard artifact previews**: Fullscreen previews now close with Escape, keep long tables horizontally scrollable, preserve readable table headers, and use a larger directory navigation scale.
+- **Native source requirements**: Files and links supplied as requirement sources now retain a complete coverage map in the Native brief, map every active executable requirement to both the target Spec and acceptance criteria, and keep incomplete or unavailable sources blocked for clarification.
 - **Native verification decisions**: Native await-user continuations now let users accept the current result, revise the implementation, or revise requirements and acceptance criteria while invalidating stale Archive authorization from older goal cycles.
-- **On-demand change review**: The new `/comet-review` Skill reviews the current Native or Classic change against its implementation diff and existing evidence, reports prioritized correctness, security, edge-case, and coverage findings, and remains read-only without advancing or replacing Verify.
+- **Pull request title scopes**: Conventional PR titles now support Native, Classic, Hook, Dashboard, Platform, Workflow, Eval, and other repository areas, including titles such as `feat(native): ...`.
 
 ### Fixed
 
-- **Windows Eval skill copies**: `comet eval` no longer copies the framework's own `.comet` runtime state into test sandboxes and artifact snapshots, preventing nested-cache `MAX_PATH` failures on Windows.
+- **Windows init reliability**: `comet init` no longer aborts OpenSpec and Skills installation with "Contained atomic write temporary file changed before commit" on file systems without stable file identities, such as exFAT or FAT32 removable and network drives. The commit-time integrity check compared the temporary file against its pre-write snapshot, so comet's own write looked like tampering; it now compares against the post-write snapshot while symlink and directory-displacement detection are unchanged.
 - **Classic design handoff refresh after Spec Patch**: Running `comet handoff <change> design --write` after OpenSpec artifacts changed no longer fails with a stale-handoff error, so the design guard can pass and the Classic full workflow proceeds from Design to Build. Refreshing now rewrites stale context files even when a manually aligned hash would otherwise short-circuit success, regenerates the context pack when OpenSpec delta specs are added, changed, or removed, and remains available after the guard has advanced the phase to build.
 - **Classic Ambient Resume**: `comet init` and `comet update` now keep the managed Ambient Resume instructions for Classic-only projects when `ambient_resume` is enabled, so re-running the commands no longer removes the block from `AGENTS.md` or `CLAUDE.md`.
-- **Fork pull request greetings**: First-time contributors now receive the repository guidance comment when opening a pull request from a fork, without weakening the read-only permissions of workflows that execute contributor code.
-- **Pull request template checks**: Pull requests now receive an actionable comment and a failing check when items from the repository template are missing or its checklist is incomplete.
 - **Classic workspace command context**: `comet classic workspace prepare` and `comet classic workspace resolve` no longer fail with "Classic command project context is unavailable" for every isolation mode (`current`, `branch`, `worktree`), fixing the workspace preparation step of the Classic Open flow.
+- **Native Archive**: Archive now respects Git ignore rules when staging workspace artifacts and keeps valid portable verification reports from being treated as incomplete migrations.
+- **Windows Eval packaging**: Packaging no longer traverses ignored pytest and Eval runtime artifacts before applying the package boundary, so stale Windows test directories cannot make `pnpm pack` fail with `EPERM`.
+- **Windows Eval isolation**: Repeated `comet eval` runs no longer copy generated `.comet` caches, run artifacts, or the framework's own Runtime state into Skill workspaces, preventing nested-cache and deep-path `MAX_PATH` failures on Windows.
+- **Monorepo Dashboard workspaces**: Starting `comet dashboard` from a monorepo subdirectory that holds `.comet/config.yaml` now uses that subdirectory as the workspace root and maps sibling Git worktrees to the same subdirectory, so the change list is no longer empty when the Comet project root is not the worktree root.
+- **Ambient Resume mid-flow replies**: Agents following the installed Ambient Resume instructions no longer stall a running Comet change after the user answers an in-flow question with a short option pick. The managed block now exempts replies to questions asked inside a Comet flow from the resume probe and clarifies that an `out_of_scope` result only blocks entering a workflow, never continuing one already in progress.
+- **Windows stdin and file JSON parsing**: Runtime commands now strip a leading UTF-8 BOM before parsing JSON, so `comet-intent.mjs route --stdin` no longer fails with "Invalid JSON" when the frame JSON comes from Windows PowerShell 5.1 redirection or `Out-File`, which emit BOM-prefixed UTF-8 by default. The same tolerance covers `comet-resume-probe.mjs --stdin`, Hook payload parsing in `comet-hook-guard.mjs` and the Hook Router, and Native `evidence format` entries read from stdin or `--entries` files.
 
 ## What's Changed [0.4.0-beta.18] - 2026-08-13
 
