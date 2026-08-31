@@ -162,7 +162,10 @@ comet init --workflow both
 
 ### 项目配置
 
-`comet init` 会按所选语言生成带逐字段注释的 `.comet/config.yaml`；`comet update` 补齐新增默认值，同时保留用户取值和未知扩展。下面是同时启用 Native 与 Classic 时的精简配置骨架：
+`comet init` 会按所选语言生成带逐字段注释的 `.comet/config.yaml`；`comet update` 补齐新增默认值，同时保留用户取值和未知扩展。
+
+<details>
+<summary>查看同时启用 Native 与 Classic 时的精简配置骨架</summary>
 
 ```yaml
 schema: comet.project.v1
@@ -198,6 +201,8 @@ classic:
 - Native 用户可读产物默认位于 `docs/comet/`，机器 Runtime 固定在 `.comet/runtime/native/`；可用 `comet init --workflow native --root artifacts` 改为 `artifacts/comet/`。Classic 专属默认值放在 `classic:`，旧顶层字段会由 `comet init` / `comet update` 迁移。
 
 云端知识、私有化 PR 等高级配置详见 [Native 配置](https://docs.comet.rpamis.com/zh/native/configuration) 与 [Classic 配置](https://docs.comet.rpamis.com/zh/classic/configuration)。Native v4 不再把旧 `snapshot` 预算持久化到用户配置中。
+
+</details>
 
 ## 对OpenClaw和Hermes、或其他AI平台的支持
 

@@ -179,7 +179,10 @@ comet init --workflow both
 
 ### Project configuration
 
-`comet init` generates `.comet/config.yaml` with field-level comments in the selected language. `comet update` fills new managed defaults while preserving user values and unknown extensions. This is the compact shape when Native and Classic are both enabled:
+`comet init` generates `.comet/config.yaml` with field-level comments in the selected language. `comet update` fills new managed defaults while preserving user values and unknown extensions.
+
+<details>
+<summary>View the compact config shape when Native and Classic are both enabled</summary>
 
 ```yaml
 schema: comet.project.v1
@@ -215,6 +218,8 @@ classic:
 - Native stores user-readable artifacts under `docs/comet/` and machine Runtime under `.comet/runtime/native/`. Use `comet init --workflow native --root artifacts` for `artifacts/comet/`. Classic-only defaults stay under `classic:`; `comet init` / `comet update` migrate legacy top-level fields.
 
 Cloud Knowledge and self-hosted PR providers remain advanced settings; see [Native configuration](https://docs.comet.rpamis.com/en/native/configuration) and [Classic configuration](https://docs.comet.rpamis.com/en/classic/configuration). Native v4 no longer persists the legacy `snapshot` budgets in user configuration.
+
+</details>
 
 ## Support for OpenClaw and Hermes, and other AI platforms
 

@@ -123,6 +123,8 @@ describe('README assets', () => {
     expect(configZh).toContain('language: zh-CN');
     expect(configEn).toContain('Cloud Knowledge and self-hosted PR');
     expect(configZh).toContain('云端知识、私有化 PR');
+    expect(configEn).toContain('<summary>View the compact config shape');
+    expect(configZh).toContain('<summary>查看同时启用 Native 与 Classic 时的精简配置骨架');
     expect(configEn).not.toContain('snapshot:');
     expect(configZh).not.toContain('snapshot:');
     expect(configZh).not.toContain('远端知识');
