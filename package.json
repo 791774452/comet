@@ -73,6 +73,8 @@
     "benchmark:classic": "node scripts/benchmark/classic-baseline-regression.mjs",
     "benchmark:bundle": "pnpm build && node scripts/benchmark/comet-bundle-compatibility-benchmark.mjs",
     "prepare": "node scripts/release/prepare.js",
+    "prepack": "node scripts/release/npm-readme.mjs apply",
+    "postpack": "node scripts/release/npm-readme.mjs restore",
     "prepublishOnly": "node scripts/release/prepublish-check.js && node build.js",
     "postinstall": "node scripts/install/postinstall.js"
   },
