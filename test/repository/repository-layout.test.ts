@@ -63,19 +63,30 @@ describe('repository layout registry', () => {
     expect(layout.sourceRoots).toEqual(['app', 'domains', 'platform']);
     expect(layout.appModules).toEqual(['cli', 'commands']);
     expect(layout.domainModules).toEqual([
+      'agent-learning',
       'bundle',
       'comet-classic',
       'comet-entry',
+      'comet-memory',
       'comet-native',
+      'comet-plugin',
       'dashboard',
       'engine',
       'eval',
       'factory',
       'integrations',
+      'project-knowledge',
       'skill',
       'workflow-contract',
     ]);
-    expect(layout.platformModules).toEqual(['fs', 'install', 'paths', 'process', 'version']);
+    expect(layout.platformModules).toEqual([
+      'fs',
+      'http',
+      'install',
+      'paths',
+      'process',
+      'version',
+    ]);
     expect(layout.scriptModules).toEqual([
       'benchmark',
       'build',

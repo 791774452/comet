@@ -53,7 +53,8 @@ function isNativeInstallSkillPath(skillPath: string): boolean {
     skillPath === 'comet/scripts/comet-entry-runtime.mjs' ||
     skillPath === 'comet/scripts/comet-hook-router.mjs' ||
     skillPath.startsWith('comet-native/') ||
-    skillPath.startsWith('comet-any/')
+    skillPath.startsWith('comet-any/') ||
+    skillPath.startsWith('comet-memory/')
   );
 }
 
@@ -79,9 +80,13 @@ function mockExternalSuccess(options: { openSpecConfig?: 'healthy' | 'missing' |
       cmdArgs.includes('claude-code')
     ) {
       const cwd = (opts as { cwd?: string } | undefined)?.cwd ?? os.tmpdir();
-      const stagedSkillsDir = path.join(cwd, '.claude', 'skills', 'comet');
+      const stagedSkill = cmdArgs.includes('obra/superpowers') ? 'brainstorming' : 'comet';
+      const stagedSkillsDir = path.join(cwd, '.claude', 'skills', stagedSkill);
       mkdirSync(stagedSkillsDir, { recursive: true });
-      writeFileSync(path.join(stagedSkillsDir, 'SKILL.md'), '# Lingma Comet\n');
+      writeFileSync(
+        path.join(stagedSkillsDir, 'SKILL.md'),
+        stagedSkill === 'brainstorming' ? '# Superpowers\n' : '# Lingma Comet\n',
+      );
       return Buffer.from('installed');
     }
 
@@ -89,7 +94,7 @@ function mockExternalSuccess(options: { openSpecConfig?: 'healthy' | 'missing' |
       return Buffer.from('/usr/bin/openspec');
     }
     if (cmd === 'openspec' && cmdArgs[0] === '--version') {
-      return Buffer.from('1.5.0');
+      return Buffer.from('1.6.0');
     }
     if (cmd === 'openspec' && cmdArgs[0] === 'init') {
       const targetPath = unquoteWindowsArg(cmdArgs[1]);
@@ -1755,6 +1760,40 @@ describe('comet init E2E', () => {
     INIT_E2E_TIMEOUT_MS,
   );
 
+  it.each([
+    { workflow: 'native' as const, expected: ['codegraph'] },
+    { workflow: 'both' as const, expected: ['openspec', 'superpowers', 'codegraph'] },
+  ])(
+    'offers the CodeGraph dependency for $workflow initialization',
+    async ({ workflow, expected }) => {
+      mockExternalSuccess();
+      await fs.mkdir(path.join(tmpDir, '.codex'), { recursive: true });
+      const fakeHome = path.join(tmpDir, 'fake-home');
+      await fs.mkdir(fakeHome, { recursive: true });
+
+      const { checkbox, select } = await import('@inquirer/prompts');
+      const { platformSelectPrompt } = await import('../../app/commands/platform-select-prompt.js');
+      vi.mocked(select).mockResolvedValueOnce(workflow);
+      if (workflow === 'both') vi.mocked(select).mockResolvedValueOnce('copy');
+      vi.mocked(platformSelectPrompt).mockResolvedValue(['codex']);
+      vi.mocked(checkbox).mockResolvedValue([]);
+
+      const { initCommand } = await import('../../app/commands/init.js');
+      await captureTextOutput(() =>
+        initCommand(tmpDir, {
+          scope: 'global',
+          language: 'en',
+        }),
+      );
+
+      const prompt = vi.mocked(checkbox).mock.calls[0]?.[0] as {
+        choices: Array<{ value: string }>;
+      };
+      expect(prompt.choices.map((choice) => choice.value)).toEqual(expected);
+    },
+    INIT_E2E_TIMEOUT_MS,
+  );
+
   it('leaves project workflow state untouched when every Comet asset copy fails', async () => {
     mockExternalSuccess();
     await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
@@ -2503,7 +2542,7 @@ describe('comet init E2E', () => {
           initCommand(tmpDir, { yes: true, json: true }),
         );
 
-        expect((result.results as unknown[]).length).toBeGreaterThanOrEqual(34);
+        expect((result.results as unknown[]).length).toBeGreaterThanOrEqual(35);
 
         const manifest = await readManifest();
         const platformDirs = [
@@ -2530,6 +2569,7 @@ describe('comet init E2E', () => {
           '.factory',
           '.iflow',
           '.pi',
+          '.omp',
           '.qoder',
           '.agents',
           '.bob',
@@ -2562,6 +2602,12 @@ describe('comet init E2E', () => {
         ).rejects.toMatchObject({ code: 'ENOENT' });
         await expect(
           fs.access(path.join(tmpDir, '.pi', 'extensions', 'comet-commands.ts')),
+        ).resolves.toBeUndefined();
+        await expect(
+          fs.access(path.join(tmpDir, '.omp', 'hooks', 'pre', 'comet-hook-router.ts')),
+        ).resolves.toBeUndefined();
+        await expect(
+          fs.access(path.join(tmpDir, '.omp', 'rules', 'comet-workflow-guard.mdc')),
         ).resolves.toBeUndefined();
       } finally {
         homedirSpy.mockRestore();
@@ -2876,6 +2922,45 @@ describe('comet init E2E', () => {
       await expect(
         fs.access(path.join(fakeHome, '.zcode', 'rules', 'comet-workflow-guard.en.md')),
       ).rejects.toThrow();
+    },
+    INIT_E2E_TIMEOUT_MS,
+  );
+
+  it(
+    'installs dsh Classic dependencies and mirrors Claude-shaped OpenSpec Skills',
+    async () => {
+      mockExternalSuccess();
+      const fakeHome = path.join(tmpDir, 'dsh-classic-init-home');
+      await fs.mkdir(fakeHome, { recursive: true });
+      vi.spyOn(os, 'homedir').mockReturnValue(fakeHome);
+
+      const { initCommand } = await import('../../app/commands/init.js');
+      const result = await captureJsonOutput(() =>
+        initCommand(tmpDir, {
+          yes: true,
+          json: true,
+          scope: 'project',
+          platform: 'dsh',
+          workflow: 'classic',
+          language: 'en',
+        }),
+      );
+
+      expect(result.selectedPlatforms).toEqual(['dsh']);
+      await expect(
+        fs.access(path.join(tmpDir, '.dsh', 'skills', 'openspec-propose', 'SKILL.md')),
+      ).resolves.toBeUndefined();
+      await expect(
+        fs.access(path.join(tmpDir, '.dsh', 'skills', 'brainstorming', 'SKILL.md')),
+      ).resolves.toBeUndefined();
+      await expect(fs.access(path.join(tmpDir, 'AGENTS.local.md'))).resolves.toBeUndefined();
+      await expect(fs.access(path.join(tmpDir, '.dsh', 'hooks.json'))).resolves.toBeUndefined();
+      await expect(
+        fs.access(path.join(tmpDir, '.dsh', 'cordis.patch.yml')),
+      ).resolves.toBeUndefined();
+      await expect(fs.access(path.join(tmpDir, '.claude'))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
     },
     INIT_E2E_TIMEOUT_MS,
   );
