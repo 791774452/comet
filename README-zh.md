@@ -45,9 +45,9 @@
 让你可以用一个工具链处理需求到归档、中断后恢复，将任意Skill组合得像Comet一样，基于科学的**Rubric**、**Pass@k**、**Pass^k**评分演进你的Skill
 
 > [!IMPORTANT]
-> **0.4.0-rc.1** — Native Supervisor Change 可以把复杂需求拆成带依赖的子 Change，让 Codex 多会话或 Claude Code Agent Teams 在独立 worktree 中实现、验证并回传结果，再由 Runtime 按顺序集成并完成父 Change 的最终验收。
+> **0.4.0-rc.1** — Native Supervisor Change 可以把复杂需求拆成**带依赖的子 Change**，让 Codex 多会话或 Claude Code Agent Teams 在**独立 worktree** 中实现、验证并回传结果，再由 Runtime **按依赖顺序集成**并完成父 Change 的**最终验收**。
 >
-> RC.1 同时带来可管理的个人记忆、项目知识与渐进式上下文，以及覆盖工作流、Git worktree、记忆、知识和插件设置的三栏 Dashboard。Native Portable State、恢复路径和 Windows Hook 体验也得到系统加固。
+> RC.1 同时带来可管理的**个人记忆**、**项目知识**与**渐进式上下文**，以及覆盖工作流、Git worktree、记忆、知识和插件设置的**三栏 Dashboard**。Native **Portable State**、**恢复路径**和 **Windows Hook** 体验也得到系统加固。
 >
 > **0.4.0-beta.7** — 新增**面向强模型、原生且可恢复**的 Native 工作流，Native 与 Classic 通过统一配置、状态、Guard、Dashboard 及 Eval 入口实现独立协作。Eval 对齐实验（16 任务 × 48 次运行，取双方均通过的 41 组配对样本）显示，**总 Token 锐减 76.8%**、**Agent 轮次降 57.4%**、**耗时缩 47.4%**，**pass^3 达 87.5%（+12.5pp）且 pass@3 均为 100%**。
 >

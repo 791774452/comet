@@ -45,9 +45,9 @@ It provides two independent requirements workflows: Native for strong models, po
 It allows you to use a toolchain to handle everything from requirements to archiving, combine any skill to make it like Comet, evolving your skills based on scientific **Rubric**, **Pass@k**, and **Pass^k** scoring.
 
 > [!IMPORTANT]
-> **0.4.0-rc.1** — Native Supervisor Changes can decompose a complex requirement into dependency-aware child changes, let independent Codex sessions or a Claude Code Agent Team implement and verify them in isolated worktrees, and then have the Runtime integrate them in order before the parent change's final acceptance.
-> 
-> RC.1 also adds manageable Personal Memory, Project Knowledge, and progressive context, plus a three-pane Dashboard for workflows, Git worktrees, memory, knowledge, and plugin settings. Native Portable State, recovery paths, and the Windows Hook experience are hardened throughout.
+> **0.4.0-rc.1** — Native Supervisor Changes can decompose a complex requirement into **dependency-aware child changes**, let independent Codex sessions or a Claude Code Agent Team implement and verify them in **isolated worktrees**, and then have the Runtime **integrate them in dependency order** before the parent change's **final acceptance**.
+>
+> RC.1 also adds manageable **Personal Memory**, **Project Knowledge**, and **progressive context**, plus a **three-pane Dashboard** for workflows, Git worktrees, memory, knowledge, and plugin settings. Native **Portable State**, **recovery paths**, and the **Windows Hook** experience are hardened throughout.
 >
 > **0.4.0-beta.7** — Added a **native, recoverable workflow for strong models**. Native and Classic operate independently through shared configuration, status, Guard, Dashboard, and Eval entry points. Aligned evaluation (16 tasks × 48 runs, using the 41 paired samples where both treatments passed) showed **76.8% fewer total tokens**, **57.4% fewer Agent rounds**, **47.4% less time**, **87.5% pass^3 (+12.5pp), and 100% pass@3**.
 >
