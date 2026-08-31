@@ -50,7 +50,7 @@ describe('npm readme transform', () => {
 
     const applied = transformReadmeForNpm(source, '▶ Play the full demo');
     expect(applied.count).toBe(1);
-    expect(applied.content).toContain('\r\n      <a href="https://github.com/rpamis/comet');
+    expect(applied.content).toContain('\r\n<a href="https://github.com/rpamis/comet');
     expect(restoreReadmeForGithub(applied.content).content).toBe(source);
   });
 

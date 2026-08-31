@@ -75,22 +75,13 @@ When a requirement contains multiple deliverables that can be implemented and ve
 
 `Complex goal → child-change DAG → isolated worktrees → independent implementation and verification → ordered integration → final parent Verify`
 
-<table>
-  <tr>
-    <td width="50%" align="center">
-      <strong>Codex multi-session execution</strong><br><br>
+**Codex multi-session execution**
 
 ![Comet Supervisor coordinating independent Codex sessions](img/supervisor-codex.mp4)
 
-    </td>
-    <td width="50%" align="center">
-      <strong>Claude Code Agent Teams execution</strong><br><br>
+**Claude Code Agent Teams execution**
 
 ![Comet Supervisor coordinating a Claude Code Agent Team](img/supervisor-claude-code.mp4)
-
-    </td>
-  </tr>
-</table>
 
 ## Extremely low memory threshold
 

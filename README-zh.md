@@ -74,22 +74,13 @@
 
 `复杂目标 → 子 Change DAG → 独立 worktree → 分别实现与验证 → 按依赖集成 → 父 Change 最终 Verify`
 
-<table>
-  <tr>
-    <td width="50%" align="center">
-      <strong>Codex 多会话执行</strong><br><br>
+**Codex 多会话执行**
 
 ![Comet Supervisor 在 Codex 中协调多个独立会话](img/supervisor-codex.mp4)
 
-    </td>
-    <td width="50%" align="center">
-      <strong>Claude Code Agent Teams 执行</strong><br><br>
+**Claude Code Agent Teams 执行**
 
 ![Comet Supervisor 在 Claude Code 中调度 Agent Teams](img/supervisor-claude-code.mp4)
-
-    </td>
-  </tr>
-</table>
 
 ## 极低的记忆门槛
 

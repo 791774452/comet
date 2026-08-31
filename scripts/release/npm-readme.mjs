@@ -22,11 +22,13 @@ export const README_FILES = [
 const GITHUB_VIDEO_EMBED = /\r?\n\r?\n!\[([^\]\r\n]+)\]\(img\/([a-z0-9-]+)\.mp4\)\r?\n\r?\n/g;
 
 // Exact mirror of the block npmPreviewBlock() emits, used to restore.
+// Top-level indentation only: inside a markdown paragraph, 4+ spaces of
+// indentation would turn the block into a code fence.
 const NPM_PREVIEW_BLOCK = new RegExp(
-  String.raw`\r?\n {6}<a href="https://github\.com/rpamis/comet/blob/master/img/([a-z0-9-]+)\.mp4">` +
-    String.raw`\r?\n {8}<img src="https://github\.com/rpamis/comet/blob/master/img/\1-preview\.png" alt="([^"]*)" width="100%">` +
-    String.raw`\r?\n {6}</a><br>` +
-    String.raw`\r?\n {6}<a href="https://github\.com/rpamis/comet/blob/master/img/\1\.mp4">[^<\r\n]*</a>` +
+  String.raw`\r?\n<a href="https://github\.com/rpamis/comet/blob/master/img/([a-z0-9-]+)\.mp4">` +
+    String.raw`\r?\n {2}<img src="https://github\.com/rpamis/comet/blob/master/img/\1-preview\.png" alt="([^"]*)" width="100%">` +
+    String.raw`\r?\n</a><br>` +
+    String.raw`\r?\n<a href="https://github\.com/rpamis/comet/blob/master/img/\1\.mp4">[^<\r\n]*</a>` +
     String.raw`\r?\n`,
   'g',
 );
@@ -43,10 +45,10 @@ function roundtripSafeAlt(alt) {
 
 function npmPreviewBlock(alt, name, playLabel, eol) {
   return [
-    `      <a href="${IMAGE_BASE}/${name}.mp4">`,
-    `        <img src="${IMAGE_BASE}/${name}-preview.png" alt="${alt}" width="100%">`,
-    '      </a><br>',
-    `      <a href="${IMAGE_BASE}/${name}.mp4">${playLabel}</a>`,
+    `<a href="${IMAGE_BASE}/${name}.mp4">`,
+    `  <img src="${IMAGE_BASE}/${name}-preview.png" alt="${alt}" width="100%">`,
+    '</a><br>',
+    `<a href="${IMAGE_BASE}/${name}.mp4">${playLabel}</a>`,
   ].join(eol);
 }
 
