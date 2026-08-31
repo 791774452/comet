@@ -79,17 +79,15 @@ When a requirement contains multiple deliverables that can be implemented and ve
   <tr>
     <td width="50%" align="center">
       <strong>Codex multi-session execution</strong><br><br>
-      <a href="https://github.com/rpamis/comet/blob/master/img/supervisor-codex.mp4">
-        <img src="https://github.com/rpamis/comet/blob/master/img/supervisor-codex-preview.png" alt="Comet Supervisor coordinating independent Codex sessions" width="100%">
-      </a><br>
-      <a href="https://github.com/rpamis/comet/blob/master/img/supervisor-codex.mp4">▶ Play the full demo</a>
+
+![Comet Supervisor coordinating independent Codex sessions](img/supervisor-codex.mp4)
+
     </td>
     <td width="50%" align="center">
       <strong>Claude Code Agent Teams execution</strong><br><br>
-      <a href="https://github.com/rpamis/comet/blob/master/img/supervisor-claude-code.mp4">
-        <img src="https://github.com/rpamis/comet/blob/master/img/supervisor-claude-code-preview.png" alt="Comet Supervisor coordinating a Claude Code Agent Team" width="100%">
-      </a><br>
-      <a href="https://github.com/rpamis/comet/blob/master/img/supervisor-claude-code.mp4">▶ Play the full demo</a>
+
+![Comet Supervisor coordinating a Claude Code Agent Team](img/supervisor-claude-code.mp4)
+
     </td>
   </tr>
 </table>

@@ -132,18 +132,22 @@ describe('README assets', () => {
   it('keeps the bilingual Supervisor showcase backed by repository assets', async () => {
     const readmeEn = await fs.readFile('README.md', 'utf-8');
     const readmeZh = await fs.readFile('README-zh.md', 'utf-8');
-    const assets = [
-      'supervisor-codex.mp4',
-      'supervisor-codex-preview.png',
-      'supervisor-claude-code.mp4',
-      'supervisor-claude-code-preview.png',
-    ];
+    const videos = ['supervisor-codex.mp4', 'supervisor-claude-code.mp4'];
 
-    for (const asset of assets) {
-      await expect(fs.stat(`img/${asset}`)).resolves.toBeDefined();
-      const url = `https://github.com/rpamis/comet/blob/master/img/${asset}`;
-      expect(readmeEn).toContain(url);
-      expect(readmeZh).toContain(url);
+    for (const video of videos) {
+      await expect(fs.stat(`img/${video}`)).resolves.toBeDefined();
+      expect(readmeEn).toContain(`](img/${video})`);
+      expect(readmeZh).toContain(`](img/${video})`);
+    }
+    // Preview images are no longer referenced by the GitHub READMEs but stay
+    // in the repository: scripts/release/npm-readme.mjs swaps them in when
+    // packing the README for npmjs.com, where video embeds cannot render.
+    for (const preview of ['supervisor-codex-preview.png', 'supervisor-claude-code-preview.png']) {
+      await expect(fs.stat(`img/${preview}`)).resolves.toBeDefined();
+    }
+    for (const readme of [readmeEn, readmeZh]) {
+      expect(readme).not.toContain('supervisor-codex-preview.png');
+      expect(readme).not.toContain('supervisor-claude-code-preview.png');
     }
   });
 

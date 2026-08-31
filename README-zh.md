@@ -78,17 +78,15 @@
   <tr>
     <td width="50%" align="center">
       <strong>Codex 多会话执行</strong><br><br>
-      <a href="https://github.com/rpamis/comet/blob/master/img/supervisor-codex.mp4">
-        <img src="https://github.com/rpamis/comet/blob/master/img/supervisor-codex-preview.png" alt="Comet Supervisor 在 Codex 中协调多个独立会话" width="100%">
-      </a><br>
-      <a href="https://github.com/rpamis/comet/blob/master/img/supervisor-codex.mp4">▶ 播放完整演示</a>
+
+![Comet Supervisor 在 Codex 中协调多个独立会话](img/supervisor-codex.mp4)
+
     </td>
     <td width="50%" align="center">
       <strong>Claude Code Agent Teams 执行</strong><br><br>
-      <a href="https://github.com/rpamis/comet/blob/master/img/supervisor-claude-code.mp4">
-        <img src="https://github.com/rpamis/comet/blob/master/img/supervisor-claude-code-preview.png" alt="Comet Supervisor 在 Claude Code 中调度 Agent Teams" width="100%">
-      </a><br>
-      <a href="https://github.com/rpamis/comet/blob/master/img/supervisor-claude-code.mp4">▶ 播放完整演示</a>
+
+![Comet Supervisor 在 Claude Code 中调度 Agent Teams](img/supervisor-claude-code.mp4)
+
     </td>
   </tr>
 </table>
