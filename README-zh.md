@@ -76,11 +76,11 @@
 
 **Codex 多会话执行**
 
-![Comet Supervisor 在 Codex 中协调多个独立会话](img/supervisor-codex.mp4)
+https://github.com/user-attachments/assets/96114cb0-f542-4f58-aa27-256f32adc46e
 
 **Claude Code Agent Teams 执行**
 
-![Comet Supervisor 在 Claude Code 中调度 Agent Teams](img/supervisor-claude-code.mp4)
+https://github.com/user-attachments/assets/41428669-a49a-46e3-a0ae-0775e4f4bb6f
 
 ## 极低的记忆门槛
 

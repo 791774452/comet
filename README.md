@@ -77,11 +77,11 @@ When a requirement contains multiple deliverables that can be implemented and ve
 
 **Codex multi-session execution**
 
-![Comet Supervisor coordinating independent Codex sessions](img/supervisor-codex.mp4)
+https://github.com/user-attachments/assets/96114cb0-f542-4f58-aa27-256f32adc46e
 
 **Claude Code Agent Teams execution**
 
-![Comet Supervisor coordinating a Claude Code Agent Team](img/supervisor-claude-code.mp4)
+https://github.com/user-attachments/assets/41428669-a49a-46e3-a0ae-0775e4f4bb6f
 
 ## Extremely low memory threshold
 

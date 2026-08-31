@@ -2,30 +2,33 @@ import { promises as fs } from 'fs';
 import { describe, expect, it } from 'vitest';
 import {
   README_FILES,
+  README_VIDEOS,
   restoreReadmeForGithub,
   transformReadmeForNpm,
 } from '../../scripts/release/npm-readme.mjs';
 
-const NPM_VIDEO_EMBED = /!\[[^\]]*\]\(img\/[a-z0-9-]+\.mp4\)/u;
+const ATTACHMENT_URL = (attachmentId: string) =>
+  `https://github.com/user-attachments/assets/${attachmentId}`;
+const MARKDOWN_MP4_EMBED = /!\[[^\]]*\]\(img\/[a-z0-9-]+\.mp4\)/u;
 
 describe('npm readme transform', () => {
   it.each(README_FILES)('round-trips $path byte-exactly', async (file) => {
     const original = await fs.readFile(file.path, 'utf8');
 
     const applied = transformReadmeForNpm(original, file.playLabel);
-    expect(applied.count).toBe(2);
+    expect(applied.count).toBe(README_VIDEOS.length);
     expect(applied.skipped).toBe(0);
-    expect(applied.content).not.toMatch(NPM_VIDEO_EMBED);
-    expect(applied.content).toContain(
-      'https://github.com/rpamis/comet/blob/master/img/supervisor-codex-preview.png',
-    );
-    expect(applied.content).toContain(
-      'https://github.com/rpamis/comet/blob/master/img/supervisor-claude-code-preview.png',
-    );
+    for (const video of README_VIDEOS) {
+      expect(applied.content).not.toContain(ATTACHMENT_URL(video.attachmentId));
+      expect(applied.content).toContain(
+        `https://github.com/rpamis/comet/blob/master/img/${video.name}-preview.png`,
+      );
+    }
     expect(applied.content).toContain(`${file.playLabel}</a>`);
+    expect(applied.content).not.toMatch(MARKDOWN_MP4_EMBED);
 
     const restored = restoreReadmeForGithub(applied.content);
-    expect(restored.count).toBe(2);
+    expect(restored.count).toBe(README_VIDEOS.length);
     expect(restored.content).toBe(original);
   });
 
@@ -39,12 +42,13 @@ describe('npm readme transform', () => {
   });
 
   it('preserves CRLF line endings through the round trip', () => {
+    const [codex] = README_VIDEOS;
     const source = [
-      '      <strong>Codex multi-session execution</strong><br><br>',
+      '**Codex multi-session execution**',
       '',
-      '![Codex demo](img/supervisor-codex.mp4)',
+      ATTACHMENT_URL(codex.attachmentId),
       '',
-      '    </td>',
+      '**Claude Code Agent Teams execution**',
       '',
     ].join('\r\n');
 
@@ -54,8 +58,9 @@ describe('npm readme transform', () => {
     expect(restoreReadmeForGithub(applied.content).content).toBe(source);
   });
 
-  it('keeps embeds with HTML-unsafe alt text untouched', () => {
-    const source = 'intro\n\n![quoted "alt"](img/supervisor-codex.mp4)\n\noutro\n';
+  it('keeps unregistered attachment URLs untouched', () => {
+    const url = ATTACHMENT_URL('00000000-dead-beef-0000-000000000000');
+    const source = `intro\n\n${url}\n\noutro\n`;
 
     const applied = transformReadmeForNpm(source, '▶ Play the full demo');
     expect(applied.count).toBe(0);
