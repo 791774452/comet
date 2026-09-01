@@ -6,6 +6,7 @@ import {
   confirmNativePortableAcceptance,
   recordNativeVerifierExecutionError,
   reserveNativeVerifierAttempt,
+  resolveNativeVerifierBlocker,
   returnNativeCandidateToBuild,
   retryNativeVerifier,
   submitNativeBuilderCandidate,
@@ -639,6 +640,12 @@ describe('Native portable Build/Verify loop', () => {
       action: 'resolve-loop-stop',
       commandArgs: null,
       requiredInputs: ['summary', 'user-decision'],
+      userCommunication: {
+        required: true,
+        message: expect.stringContaining('paused to avoid looping on the same problem'),
+        suggestedReply: 'Continue repairing',
+        agentInstruction: expect.stringContaining('revise-implementation'),
+      },
       commandAlternatives: expect.arrayContaining([
         expect.objectContaining({
           name: 'revise-implementation',
@@ -652,6 +659,65 @@ describe('Native portable Build/Verify loop', () => {
         }),
       ]),
     });
+    expect(
+      nativePortableContinuation({ ...state, language: 'zh-CN' }).userCommunication,
+    ).toMatchObject({
+      required: true,
+      message: expect.stringContaining('本次修改已暂停'),
+      suggestedReply: '继续修复',
+      agentInstruction: expect.stringContaining('revise-implementation'),
+    });
+  });
+
+  it('explains a budget-exhausted stop without calling it a no-progress loop', () => {
+    const { state, runner } = buildState();
+    const stopped = applyNativeVerifierEnvelope({
+      state,
+      envelope: envelope(runner, state, 'fail', ['A1']),
+      checks,
+      maxVerifyFailures: 1,
+    }).state;
+
+    expect(stopped).toMatchObject({
+      status: 'await-user',
+      loop: { failed_iteration_count: 1, no_progress_count: 0, stage: 'await-user' },
+    });
+    expect(nativePortableContinuation(stopped).userCommunication).toMatchObject({
+      required: true,
+      message: expect.stringContaining('used its configured failure budget'),
+      suggestedReply: 'Continue repairing',
+    });
+    expect(
+      nativePortableContinuation({ ...stopped, language: 'zh-CN' }).userCommunication,
+    ).toMatchObject({
+      required: true,
+      message: expect.stringContaining('已用完配置的预算'),
+    });
+  });
+
+  it('persists one stop reason when budget and no-progress thresholds overlap', () => {
+    const prepared = buildState();
+    const primed = {
+      ...prepared.state,
+      loop: {
+        ...prepared.state.loop,
+        failed_iteration_count: 2,
+        no_progress_count: 2,
+        previous_unresolved_ids: ['A1'],
+      },
+    };
+    const stopped = applyNativeVerifierEnvelope({
+      state: primed,
+      envelope: envelope(prepared.runner, primed, 'fail', ['A1']),
+      checks,
+      maxVerifyFailures: 3,
+    }).state;
+
+    expect((stopped.loop as { stop_reason?: string }).stop_reason).toBe('stalled');
+    expect(stopped.blockers[0]?.reason.text).toContain('did not strictly reduce');
+    expect(nativePortableContinuation(stopped).userCommunication.message).toContain(
+      'failed three times in a row',
+    );
   });
 
   it('keeps a report reference for a semantic blocker', () => {
@@ -668,6 +734,26 @@ describe('Native portable Build/Verify loop', () => {
       verification_result: 'blocked',
       verification_report: 'verification.md',
       loop: { next_action: 'resolve-verifier-blocker' },
+    });
+    expect(nativePortableContinuation(result).userCommunication).toMatchObject({
+      required: true,
+      message: expect.stringContaining('information only you can provide'),
+      suggestedReply: null,
+      agentInstruction: expect.stringContaining('resolve-verifier-blocker'),
+    });
+    expect(
+      nativePortableContinuation({ ...result, language: 'zh-CN' }).userCommunication,
+    ).toMatchObject({
+      required: true,
+      message: expect.stringContaining('缺少只有你能提供的信息'),
+    });
+
+    const resumed = resolveNativeVerifierBlocker(result, {
+      reason: 'The external service returns 429 under load; that behavior is expected.',
+    });
+    expect(resumed.history[resumed.history.length - 1]).toMatchObject({
+      outcome: 'recovery',
+      summary: { text: 'The external service returns 429 under load; that behavior is expected.' },
     });
   });
 

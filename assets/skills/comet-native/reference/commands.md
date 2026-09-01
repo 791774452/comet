@@ -1,6 +1,6 @@
 # Native command and exception reference
 
-During the normal flow, execute the command returned in Runtime `continuation`. This file explains returned fields and handles these cases: command input is rejected, the Verifier cannot start, the Verifier task fails, the Verifier cannot decide because external information is missing, or the Runtime asks the user to confirm degraded verification. `continuation.disposition` says whether to continue, wait for the user, resolve a blocker, or finish. Use a follow-up command containing `--confirmed` only after explicit user confirmation.
+During the normal flow, execute the command returned in Runtime `continuation`. This file explains returned fields and handles these cases: command input is rejected, the Verifier cannot start, the Verifier task fails, the Verifier cannot decide because external information is missing, or the Runtime asks the user to confirm degraded verification. `continuation.disposition` says whether to continue, wait for the user, resolve a blocker, or finish. Use a follow-up command containing `--confirmed` only after explicit user confirmation. CLI text is user-first (`summary`, one `NEXT:`, optional `RELAY TO USER:`); use `--json` for the additive envelope and `--verbose` only for structured machine troubleshooting.
 
 Treat CLI help as authoritative for command signatures and current arguments:
 
@@ -12,18 +12,18 @@ comet native <group> <command> --help
 
 ## Next action returned by the Runtime
 
-- `disposition`: whether to continue, wait for the user, resolve a blocker, or finish.
+- `disposition`: whether to continue, wait for the user, resolve a blocker, or finish; when `userCommunication.required` is true, relay its message and wait before executing any confirmation command.
 - `commandArgs` / `commandAlternatives`: complete command arguments from the Runtime. Alternatives are complete commands for mutually exclusive user decisions; execute the matching one and do not combine them.
 - `inputOptions`: fields and a JSON template for this command.
 - `workspace` / `preparation`: the actual working directory and change-creation result.
 - `stateVersion` / `loop`: the current state version and acceptance Loop progress.
 - `acceptance` / `childSummary` / `readyChildren` / `supervisor` / `details.nextPageArgs`: acceptance counts, Supervisor Change child counts, currently ready children, the integration branch and current task-package summary, and the next detail-page command.
-- `verifierDispatch`: workspace and evidence locations, current `scopeIds`, counts, content refs, detail-page args, review summary, and check results needed to start an independent Verifier.
+- `verifierDispatch`: workspace and evidence locations, current `scopeIds`, counts, content refs, detail-page args, review summary, and check results needed to start an independent Verifier; when present, `recoveryContext` is the latest recovery or user-provided context and must be passed directly to the Verifier.
 - `workspaceFinishResult` / `recoveryArgs`: the post-Archive workspace result and recovery command.
 
 Angle brackets in a template mark values to fill in. `await-user` means wait for the user's decision before running an advancing command. If `commandArgs` is `null` and `commandAlternatives` is present, confirm the user's decision, then execute the selected alternative's complete `commandArgs` while preserving `--expected-state-version` and `--expected-action`. If the command fails because the state or action binding is stale, reread the latest `continuation` and continue from the current state; do not construct an unguarded replacement command. `localExecution: absent` means only that this machine has no currently running local task; it does not mean the change is damaged.
 
-When starting a Verifier, pass the location fields in `verifierDispatch` unchanged: `projectRoot` is the control directory used to run Native commands; `verificationRoot` is the workspace containing the implementation under verification, and a Supervisor parent uses the integration worktree; `changeDir` is the relative-path base for `briefRef` and `specRefs[].ref`; `supervisorStateRef` points to local state containing child verification and integration evidence, and is `null` for an ordinary change. `detailsPageArgs` already includes `--project-root`; preserve it when querying from any working directory. After requesting additional checks, return their results and the handoff information to the same Verifier and continue waiting for its final result.
+When starting a Verifier, pass the location fields in `verifierDispatch` unchanged: `projectRoot` is the control directory used to run Native commands; `verificationRoot` is the workspace containing the implementation under verification, and a Supervisor parent uses the integration worktree; `changeDir` is the relative-path base for `briefRef` and `specRefs[].ref`; `supervisorStateRef` points to local state containing child verification and integration evidence, and is `null` for an ordinary change. When present, pass `recoveryContext` unchanged as the latest recovery or user-provided context. `detailsPageArgs` already includes `--project-root`; preserve it when querying from any working directory. After requesting additional checks, return their results and the handoff information to the same Verifier and continue waiting for its final result.
 
 ## Fill command input
 

@@ -427,6 +427,10 @@ export function applyNativeVerifierEnvelope(options: {
   const limitReached = failedIterationCount >= options.maxVerifyFailures;
   const stalled = noProgressCount >= 3;
   const stop = limitReached || stalled;
+  // A stagnation stop is more specific than a generic failure budget stop.
+  // Persist the decision so continuation text and the durable blocker cannot
+  // disagree when both thresholds are crossed by the same result.
+  const stopReason = stalled ? 'stalled' : limitReached ? 'budget' : undefined;
   const withHistory = appendNativePortableHistory(
     { ...state, acceptance, verification } as NativePortableState,
     historyEntry({
@@ -455,7 +459,7 @@ export function applyNativeVerifierEnvelope(options: {
             {
               owner: 'user',
               reason: toNativePortableText(
-                limitReached
+                stopReason === 'budget'
                   ? 'Native verification reached the configured failed iteration limit.'
                   : 'Native verification did not strictly reduce the unresolved acceptance set three times.',
               ),
@@ -482,6 +486,7 @@ export function applyNativeVerifierEnvelope(options: {
         attempt: stop ? state.loop.attempt : 0,
         failed_iteration_count: failedIterationCount,
         no_progress_count: noProgressCount,
+        ...(stopReason === undefined ? {} : { stop_reason: stopReason }),
         execution_failure_count: 0,
         previous_unresolved_ids: unresolvedIds,
         next_action: stop ? 'await-user' : 'repair-failed-acceptance',
@@ -654,7 +659,10 @@ export function confirmNativeVerifierUnavailable(options: {
   });
 }
 
-export function resolveNativeVerifierBlocker(stateInput: NativePortableState): NativePortableState {
+export function resolveNativeVerifierBlocker(
+  stateInput: NativePortableState,
+  options?: { reason?: string; now?: Date },
+): NativePortableState {
   const state = parseNativePortableState(stateInput);
   if (
     state.phase !== 'verify' ||
@@ -670,8 +678,21 @@ export function resolveNativeVerifierBlocker(stateInput: NativePortableState): N
   ) {
     throw new Error('Native change is not awaiting resolution of a semantic Verifier blocker');
   }
+  // The user's resolution context is the only place the next Verifier round
+  // can learn what information unblocked the semantic judgment, so it must be
+  // persisted in history instead of dying with the command invocation.
+  const withHistory = appendNativePortableHistory(
+    state,
+    historyEntry({
+      state,
+      outcome: 'recovery',
+      summary:
+        options?.reason ?? 'Resolved the semantic Verifier blocker and resumed verification.',
+      completedAt: (options?.now ?? new Date()).toISOString(),
+    }),
+  );
   return parseNativePortableState({
-    ...state,
+    ...withHistory,
     status: 'active',
     state_version: nextVersion(state),
     verification_result: 'pending',
@@ -811,6 +832,7 @@ export function returnNativeCandidateToBuild(options: {
       iteration: state.loop.iteration + 1,
       attempt: 0,
       execution_failure_count: 0,
+      stop_reason: undefined,
       next_action: 'submit-builder-candidate',
     },
   });

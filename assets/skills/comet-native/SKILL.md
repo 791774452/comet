@@ -5,13 +5,14 @@ description: "Comet Native workflow. Use when the user explicitly invokes /comet
 
 # Comet Native
 
-Native stores the requirements, complete target specifications, current progress, and verification conclusions in the project. After completing each phase, return to the Runtime for the next action and handle only the phase it specifies.
+Native stores the requirements, complete target specifications, current progress, and verification conclusions in the project. After completing each phase, return to the Runtime for the next action and handle only the phase it specifies. CLI text starts with a user-facing `summary` and one `NEXT:` step; use `--json` for the additive `summary`/`next`/`user_message` envelope and `--verbose` only for machine-state troubleshooting, and relay `userCommunication` before waiting for a required user decision.
 ## Inviolable boundaries
 - The on-disk `.comet/config.yaml`, current change, `comet-state.yaml`, and formal artifacts are the working source; chat memory is only supplementary.
 - The Runtime manages workflow state, local execution state, logs, locks, and transactions. Advance every phase through the public `comet native` commands on PATH; users do not run these commands manually.
 - If a command is unavailable, report an incomplete Comet installation and stop. Treat `comet native <command> --help` as authoritative for arguments and output.
 - The Builder submits a candidate, and a fresh read-only Verifier makes the verification judgment. How the Verifier starts follows the user's coordination choice and the Runtime's latest `continuation`.
 - This Skill and the Runtime complete the Native workflow; Native does not depend on any external Skill.
+
 ## Start or resume
 1. When the change name is known, first run the compact query `comet native status <change-name> --json`. Only run `comet native status --json` when the name is unknown, then query the selected change.
 2. Add `--details` only when the current action needs acceptance text, the Builder handoff, history, or verification details, and follow returned `nextPageArgs` page by page. Read only pages covering the current `scopeIds`; do not repeat the complete state in the same step. Run `show` or read the corresponding brief/Spec only when editing or checking formal content.
@@ -78,7 +79,7 @@ Completion criterion: the implementation and relevant checks are ready for verif
 
 ## Verify
 
-When Runtime requests `dispatch-verifier`, fill `inputOptions.template` with the tests and check commands needed for the current candidate, then let Runtime execute them. Runtime reuses completed checks; follow the latest `continuation` for retries or additions. `verifierDispatch` carries workspace and evidence locations, `scopeIds`, counts, brief/Spec refs, detail-page args, the review summary, and check results instead of all acceptance text. Read detail pages covering `scopeIds`, then immediately start a fresh read-only Verifier subagent and pass the workspace and evidence locations through unchanged. If subagents are unavailable, start an independent Agent session separate from the Builder only when multi-session coordination was selected and the platform can manage independent sessions; otherwise report the Verifier as unavailable through the command reference and follow the latest `continuation`.
+When Runtime requests `dispatch-verifier`, fill `inputOptions.template` with the tests and check commands needed for the current candidate, then let Runtime execute them. Runtime reuses completed checks; follow the latest `continuation` for retries or additions. `verifierDispatch` carries workspace and evidence locations, `scopeIds`, counts, brief/Spec refs, detail-page args, the review summary, and check results instead of all acceptance text. When present, pass `recoveryContext` unchanged to the Verifier as the latest recovery or user-provided context. Read detail pages covering `scopeIds`, then immediately start a fresh read-only Verifier subagent and pass the workspace and evidence locations through unchanged. If subagents are unavailable, start an independent Agent session separate from the Builder only when multi-session coordination was selected and the platform can manage independent sessions; otherwise report the Verifier as unavailable through the command reference and follow the latest `continuation`.
 The Verifier first reads acceptance scenarios for the current `scopeIds`, the brief, complete target Specs, actual implementation, and Runtime check results. It reads the Builder handoff last as an investigation lead so the judgment remains independent. The Verifier remains read-only. If existing checks are insufficient, list additional checks in Runtime `inputOptions.template`; Runtime executes them and returns the results.
 The Verifier must mark every scenario in the current `scopeIds` exactly once as `passed`, `failed`, or `blocked`. After a repair scope passes, Runtime retains completed checks and prepares a fresh Verifier covering every acceptance scenario; Archive is allowed only after this final full verification passes. For a failed or blocked item, provide a reason the next Build round can act on directly. If the Verifier cannot start, execution fails, or external information is missing, follow the command reference and latest `continuation`. When the final Skill-started Verifier passes and Runtime waits for the user, use `--accept-result` to enter Archive only after the user accepts; otherwise use `--revise-implementation` or `--revise-requirements`.
 Completion criterion: Runtime has accepted the complete Verifier result and explicitly entered Build, Archive, `await-user`, `blocked`, or `done`.
@@ -103,9 +104,9 @@ Completion criterion: state is `done`, and the user-authorized workspace finish 
 
 ## Follow-up actions
 
-After every command, handle only the latest `continuation`:
+After every command, handle only the latest `continuation` and apply the CLI audience split:
 - `continue`: execute `commandArgs` and fill `inputOptions` from its template.
-- `await-user`: wait for the listed user decision. With `commandAlternatives`, execute the matching complete `commandArgs`, preserve `--expected-state-version` plus `--expected-action`, and reread the latest `continuation` if the alternative is stale. Do not reconstruct an unguarded command.
+- `await-user`: relay `userCommunication.message` and `suggestedReply` when present, then wait for the listed user decision. With `commandAlternatives`, execute the matching complete `commandArgs`, preserve `--expected-state-version` plus `--expected-action`, and reread the latest `continuation` if the alternative is stale. Do not reconstruct an unguarded command.
 - `blocked`: resolve the listed blocker or recovery action first.
 - `done`: finish.
 
