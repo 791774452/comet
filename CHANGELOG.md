@@ -6,6 +6,7 @@ All notable changes to @rpamis/comet will be documented in this file.
 
 ### Fixed
 
+- **Dashboard theme text contrast**: Dashboard form placeholders, disabled text, workflow summary status badges, and Ant Design component states now use readable light- and dark-theme colors, with active and archived workflow states remaining visually distinct.
 - **Devin Desktop OpenSpec compatibility**: `comet init`, `comet update`, and OpenSpec integration now use Devin Desktop's `.devin/` Skill root while keeping `windsurf` as the stable platform selector and recognizing legacy `.windsurf/` installations.
 - **Global configuration recovery**: `comet init` and a Home-directory `comet update` now recover known legacy or project-schema global configurations automatically, without asking users to edit or delete `.comet/config.yaml`.
 - **Windows atomic writes**: Comet now refreshes temporary-file and Native lock metadata after a successful close, so NTFS close-time metadata finalization no longer makes Comet treat its own files as externally changed. Identity and post-close mutation checks remain enforced before publish or release.
