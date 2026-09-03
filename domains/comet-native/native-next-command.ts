@@ -2,6 +2,7 @@ import { inspectNativeChildren } from './native-children.js';
 import { nativePortableContinuation } from './native-portable-continuation.js';
 import { migrateNativeLegacyChangeToPortable } from './native-portable-migration-runtime.js';
 import {
+  nativePortableWorkspaceMismatch,
   recoverNativePortableChange,
   type NativePortableRecoveryResult,
 } from './native-portable-recovery.js';
@@ -18,6 +19,8 @@ import {
   confirmNativePortableVerifierUnavailable,
   inspectNativePortableAcceptanceDrift,
   isNativePortableChange,
+  readNativePortableChange,
+  recoverNativeSupervisorFinalVerificationOnResume,
   resolveNativePortableVerifierBlocker,
   returnNativePortableChangeToBuild,
   returnNativePortableChangeToShape,
@@ -176,6 +179,20 @@ export async function nativeNextCommand(
     });
   }
 
+  const initialState = await readNativePortableChange(configured.paths, name);
+  const initialWorkspaceMismatch = nativePortableWorkspaceMismatch(configured.paths, initialState);
+  if (initialWorkspaceMismatch) {
+    return success('next', {
+      state: nativePortableStateSummary(initialState),
+      recovery: {
+        action: 'await-user',
+        reason: 'workspace-mismatch',
+        message: initialWorkspaceMismatch,
+      },
+      ...(await portableParentView(configured.paths, initialState)),
+    });
+  }
+
   if (runnerInputFile) {
     if (
       summary ||
@@ -190,6 +207,16 @@ export async function nativeNextCommand(
       throw new NativeUsageError(
         '--runner-input cannot be combined with --summary, continuation expectations, or Agent transition flags',
       );
+    }
+    const supervisorRecovery = await recoverNativeSupervisorFinalVerificationOnResume({
+      paths: configured.paths,
+      name,
+    });
+    if (supervisorRecovery.action === 'rerun-final-verification') {
+      return success('next', {
+        state: nativePortableStateSummary(supervisorRecovery.state),
+        ...(await portableParentView(configured.paths, supervisorRecovery.state)),
+      });
     }
     const recovery = await recoverNativePortableChange({
       paths: configured.paths,
@@ -244,6 +271,16 @@ export async function nativeNextCommand(
       state: nativePortableStateSummary(result.state),
       ...(await portableParentView(configured.paths, result.state)),
       coordination: NATIVE_SKILL_COORDINATION,
+    });
+  }
+  const supervisorRecovery = await recoverNativeSupervisorFinalVerificationOnResume({
+    paths: configured.paths,
+    name,
+  });
+  if (supervisorRecovery.action === 'rerun-final-verification') {
+    return success('next', {
+      state: nativePortableStateSummary(supervisorRecovery.state),
+      ...(await portableParentView(configured.paths, supervisorRecovery.state)),
     });
   }
   const recovery = await recoverNativePortableChange({ paths: configured.paths, name });

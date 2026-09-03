@@ -30,17 +30,14 @@ export interface NativePortableRecoveryResult {
   local: NativeLocalExecutionState | null;
   action: 'resume-stable-boundary' | 'reverify' | 'await-user' | 'done';
   reason:
-    | 'available'
-    | 'missing'
-    | 'invalid'
-    | 'stale'
-    | 'interrupted'
-    | 'workspace-mismatch'
-    | 'done';
+    'available' | 'missing' | 'invalid' | 'stale' | 'interrupted' | 'workspace-mismatch' | 'done';
   message: string;
 }
 
-function workspaceMismatch(paths: NativeProjectPaths, state: NativePortableState): string | null {
+export function nativePortableWorkspaceMismatch(
+  paths: NativeProjectPaths,
+  state: NativePortableState,
+): string | null {
   const context = inspectGitWorktree(paths.projectRoot);
   if (state.workspace.change_branch !== null) {
     if (!context.isGitWorktree) return 'The portable change requires a Git branch/worktree';
@@ -134,7 +131,7 @@ export async function recoverNativePortableChange(options: {
           message: 'Archived Native changes do not require a local execution overlay.',
         };
       }
-      const mismatch = workspaceMismatch(options.paths, state);
+      const mismatch = nativePortableWorkspaceMismatch(options.paths, state);
       if (mismatch) {
         return {
           state,
