@@ -2,6 +2,20 @@
 
 All notable changes to @rpamis/comet will be documented in this file.
 
+## What's Changed [0.4.0-rc.4] - 2026-09-03
+
+### Changed
+
+- **Native Archive continuation**: Archive-ready changes now start with one complete `--dry-run`; isolated branches receive explicit finish choices and exact follow-up commands, so Agents do not guess flags or repeat status probes.
+- **Archive preflight guidance**: Dry-run now reports workspace and generated-file blockers together with the next confirmed command, preserving user-owned files and keeping dry-run and confirmed behavior aligned.
+
+### Fixed
+
+- **Dependency security updates**: Updated the transitive `fast-uri` dependency to `3.1.7` and synchronized npm and pnpm lockfiles to remove vulnerable `browserslist` and `fast-uri` resolutions, addressing the reported URL normalization, SSRF, and Browserslist stats-processing risks.
+- **Native legacy Supervisor recovery**: A stale, never-started v2 execution overlay no longer overrides completed `children.v1` portable history; Native detects the conflict, removes only the exact empty overlay, and accepts the portable parent handoff without manual file deletion.
+- **Archive-owned state finalization**: Native Archive now includes the active change's state and verification artifacts in its authorized archive commit, avoiding manual commits and retry loops.
+- **Task completion handoff**: Native continuation guidance reuses the original task context instead of probing undeclared environment variables.
+
 ## What's Changed [0.4.0-rc.3] - 2026-09-03
 
 ### Fixed
